@@ -1,0 +1,10 @@
+# CIFAR-10 is 170 MB and re-downloadable
+data/
+
+# scratch
+_verify.py
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# keep results/*.json -- they ARE the cached experiment histories
