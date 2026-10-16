@@ -19,3 +19,12 @@ Select the **Python (cnn_gpu)** kernel in Jupyter/VS Code.
 - [ ] Task 2 — Optimizers
 - [ ] Task 3 — Regularization and residual connections
 - [ ] Task 4 — Best CNN under 500k parameters
+
+## Notes
+
+- The CIFAR-10 host (`cs.toronto.edu`, which redirects to `cave.cs.toronto.edu`)
+  is slow — expect ~2 hours for the 170 MB archive on a first run. It is
+  downloaded once and then cached in `data/`.
+- Python 3.10 on Windows can throw `ssl.SSLError: [ASN1: NOT_ENOUGH_DATA]`
+  when loading the system certificate store, which breaks the download. The
+  setup cell works around this by pointing SSL at certifi's CA bundle.
