@@ -1,0 +1,7 @@
+{
+ "test_acc": 0.9005,
+ "val_acc": 0.896,
+ "n_params": 463627,
+ "epochs": 20,
+ "_seconds": 1.3
+}

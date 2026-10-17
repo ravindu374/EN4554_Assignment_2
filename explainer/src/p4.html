@@ -6,11 +6,6 @@ epochs</b>. Tune on the validation split. Report an ablation of at least three d
 (e.g. shortcut, augmentation, weight decay, optimizer), and the test accuracy of your final model,
 <b>evaluated once</b>.</div>
 
-<div class="box why"><b class="lbl">Status</b>
-The cells for this task are written and verified, but at the time of writing this document the
-runs had not yet been executed, so the result tables below are left for you to fill in from your
-own output. Everything else &mdash; the design, the reasoning, the equations &mdash; is final.</div>
-
 <h2>5.1 Designing to the budget</h2>
 
 <p>Twenty epochs is the binding constraint, and it changes what the right architecture is. A very
@@ -71,21 +66,50 @@ attributable to that ingredient alone.</p>
 <table>
 <tr><th style="width:20%">Configuration</th><th style="width:26%">What changed</th>
     <th style="width:16%">Best val</th><th>Change</th></tr>
-<tr><td>full recipe</td><td>&mdash;</td><td class="num">_____</td><td>baseline</td></tr>
+<tr><td><b>full recipe</b></td><td>&mdash;</td><td class="num"><b>89.60%</b></td>
+    <td>baseline</td></tr>
+<tr><td><b>minus augment</b></td><td>no flip, crop or cutout</td><td class="num">85.48%</td>
+    <td class="num"><b>&minus;4.12 pts</b></td></tr>
+<tr><td>Adam instead</td><td>Adam at $\eta=10^{-3}$</td><td class="num">86.90%</td>
+    <td class="num">&minus;2.70 pts</td></tr>
 <tr><td>minus shortcut</td><td>plain network, <b>identical</b> parameter count</td>
-    <td class="num">_____</td><td class="num">_____</td></tr>
-<tr><td>minus augment</td><td>no flip, crop or cutout</td><td class="num">_____</td>
-    <td class="num">_____</td></tr>
-<tr><td>minus weight decay</td><td>$\lambda = 0$</td><td class="num">_____</td>
-    <td class="num">_____</td></tr>
-<tr><td>Adam instead</td><td>Adam at $\eta=10^{-3}$</td><td class="num">_____</td>
-    <td class="num">_____</td></tr>
+    <td class="num">87.56%</td><td class="num">&minus;2.04 pts</td></tr>
+<tr><td>minus weight decay</td><td>$\lambda = 0$</td><td class="num">87.58%</td>
+    <td class="num">&minus;2.02 pts</td></tr>
 </table>
 
-<div class="box key"><b class="lbl">What the ablation is actually for</b>
-The deliverable is the <b>ranking</b>, not the headline accuracy. It says which design decisions
-carried weight and which were nearly free. Based on Task 3(a) I expect augmentation to be the
-largest single contributor, since it was the only method there that prevented memorisation.</div>
+<div class="box key"><b class="lbl">Augmentation wins by a factor of two &mdash; and the training loss shows why</b>
+Removing augmentation costs <b>4.12 points</b>; the next-largest removal costs 2.70. The reason is
+visible in the training loss: without augmentation it falls to <b>0.0047</b>, about <b>48 times
+lower</b> than the full recipe, while validation accuracy drops four points. That is the textbook
+signature of overfitting &mdash; fitting the training data far <i>better</i> and the held-out data
+far <i>worse</i>.
+<table style="margin-top:.5em">
+<tr><th>Configuration</th><th>Final training loss</th><th>Mechanism</th></tr>
+<tr><td>full recipe</td><td class="num">0.2281</td><td>&mdash;</td></tr>
+<tr><td>minus augment</td><td class="num">0.0047</td><td><b>generalisation</b> &mdash; fits training data much harder</td></tr>
+<tr><td>minus shortcut</td><td class="num">0.3228</td><td><b>optimisation</b> &mdash; fits training data <i>less</i> well</td></tr>
+<tr><td>minus weight decay</td><td class="num">0.2848</td><td>mild generalisation cost</td></tr>
+<tr><td>Adam instead</td><td class="num">0.3284</td><td>optimises less effectively here</td></tr>
+</table></div>
+
+<div class="box key"><b class="lbl">The shortcut acts through a different mechanism entirely</b>
+Removing it makes the training loss go <b>up</b> (0.2281 &rarr; 0.3228) &mdash; the plain network
+fits the training data <i>less</i> well, not more. So this is an <b>optimisation</b> cost, exactly
+the distinction Task 3(b) established, and not a generalisation one. Both have identical parameter
+counts (463,627). The effect is smaller here than at depth 56 because depth 20 is comfortably
+trainable without shortcuts.</div>
+
+<div class="box trap"><b class="lbl">Shortcut and weight decay are TIED, not ranked</b>
+They differ by <b>0.02 points</b> (&minus;2.04 vs &minus;2.02) &mdash; far below the few tenths of a
+point of run-to-run variation from a single seed. Reporting one as more important than the other
+would be reading noise.</div>
+
+<div class="box why"><b class="lbl">SGD beat Adam here, reversing Task 2(c)</b>
+Adam won on the small CNN at 15 epochs; here SGD with cosine annealing wins by 2.70 points. Adam's
+advantage is being <i>forgiving</i> about the learning rate &mdash; but once the rate is well chosen
+and annealed smoothly to zero, tuned momentum overtakes it. Adam also ends at a higher training loss
+(0.3284), so it is genuinely optimising less effectively, not merely generalising differently.</div>
 
 <div class="box trap"><b class="lbl">Two caveats to state when reporting it</b>
 <b>Single seed.</b> Run-to-run variation on CIFAR-10 at this scale is a few tenths of a point, so
@@ -95,6 +119,14 @@ real ranking.
 <b>No interactions.</b> A one-factor-at-a-time ablation cannot see interactions &mdash; removing
 two ingredients need not cost the sum of removing each. Task 3(a) showed exactly this: every
 regularizer helped alone, but all five together were <i>worse</i> than flip+crop by itself.</div>
+
+<figure>
+  <img src="figs/f_t4.svg" alt="Task 4 ablation">
+  <figcaption><b>Task 4 ablation.</b> Left: what each ingredient is worth, measured by removing it.
+  Right: training loss on a log scale. Note the amber curve (&ldquo;minus augment&rdquo;) plunging far
+  below the others &mdash; it fits the training data 48 times harder and generalises four points
+  worse. That divergence <i>is</i> overfitting, caught in the act.</figcaption>
+</figure>
 
 <h2>5.4 The single test evaluation</h2>
 
@@ -114,20 +146,25 @@ exactly the moment you would be contaminating the estimate.</div>
 <tr><td>architecture</td><td>residual, depth 20, widths 21/42/84</td></tr>
 <tr><td>parameters</td><td class="num">463,627 of 500,000 allowed (92.7%)</td></tr>
 <tr><td>epochs</td><td class="num">20 of 20 allowed</td></tr>
-<tr><td>validation accuracy</td><td class="num">_____%</td></tr>
-<tr><td><b>test accuracy</b></td><td class="num"><b>_____%</b></td></tr>
+<tr><td>validation accuracy</td><td class="num">89.60%</td></tr>
+<tr><td><b>test accuracy</b></td><td class="num"><b>90.05%</b></td></tr>
 </table>
 
-<div class="box why"><b class="lbl">How to read the test-vs-validation comparison</b>
-They should land within about a point of each other.
-<ul>
-<li><b>Test close to validation</b> &rarr; the validation split did its job. It was used for every
-decision so it is mildly optimistic, but with only five configurations compared the selection bias
-is small.</li>
-<li><b>Test noticeably below validation</b> &rarr; that gap is the price of having tuned on
-validation. Some of the winner's margin was luck. Report the test number either way: it is the only
-unbiased estimate you have.</li>
-</ul></div>
+<div class="box key"><b class="lbl">Test came in 0.45 points ABOVE validation</b>
+90.05% against 89.60% &mdash; the comfortable outcome. The validation split absorbed every design
+decision in this task, so it carries some optimistic bias, but with only five configurations
+compared that bias is evidently smaller than the noise between the two splits. The test set is also
+<b>twice the size</b> of the validation set (10,000 vs 5,000), making it the less noisy measurement
+of the two. Had test come in several points <i>below</i> validation, that gap would have been the
+price of tuning, and some of the winning margin would have been luck.</div>
+
+<div class="box why"><b class="lbl">The binding constraint was epochs, not parameters</b>
+The full recipe ends at a training loss of 0.2281 &mdash; nowhere near zero &mdash; and its
+validation curve is still rising at epoch 20. The model is <b>underfitted</b>, not saturated.
+Published CIFAR-10 ResNets reach 93&ndash;95%, but they train for 180+ epochs, nine times this
+budget. Given more, the order to try things is: <b>longer training first</b> (the curve says there
+is more to extract), <b>then more width</b> (36,373 parameters are still unused), and <b>more depth
+last</b> &mdash; because Task 3(b) showed depth does not pay without the epochs to support it.</div>
 
 
 <h1 class="pb">6. Explaining this to someone in five minutes</h1>
@@ -178,7 +215,12 @@ find it. One line &mdash; <code>out = out + x</code> &mdash; fixes it: 0.0009 in
 
 <div class="box say"><b class="lbl">5. Task 4 and the punchline (30 seconds)</b>
 "Finally I combined everything under a budget: at most 500k parameters and 20 epochs. I spent the
-budget on width rather than depth, because Task 3 showed depth needs more epochs than I had.
+budget on width rather than depth, because Task 3 showed depth needs more epochs than I had. It scored
+<b>90.05% on the test set</b>, which I measured exactly once.
+<br><br>
+The ablation says augmentation mattered most by a factor of two &mdash; and you can see why in the
+training loss: without it the network fits the training data 48 times harder and the held-out data
+four points worse.
 <br><br>
 The thread through all of it is that <b>structure beats size</b>. My best model has fewer
 parameters than the fully-connected network I started with, and is far more accurate &mdash;
@@ -256,8 +298,9 @@ first network had to try to learn from data, and could not."</div>
 
 <div style="margin-top:2.5em;padding-top:.8em;border-top:1px solid #d8e0ee;font-size:8.6pt;color:#6b7a99">
 Companion to <code>EN4554_a02.ipynb</code> &mdash; Lakshan R.G.R, 220355M.
-Figures for Tasks 1&ndash;3 are generated from the measured results in
-<code>results/*.json</code>; Task 4 tables are left blank pending that run.
+All figures and numbers are generated from the measured results in
+<code>results/*.json</code>. Final model: 463,627 parameters, 20 epochs,
+<b>90.05% test accuracy</b>.
 </div>
 
 </body>

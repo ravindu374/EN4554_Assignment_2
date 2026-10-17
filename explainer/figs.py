@@ -229,3 +229,37 @@ except Exception as e:
     print('  skipped augmentation figure:', e)
 
 print('done -> figs/')
+
+
+# ---------------------------------------------------------------- Task 4
+t4 = load('t4_ablation')
+t4e = load('t4_test_eval')
+if t4:
+    full = t4['runs']['full recipe']['best_val_acc']
+    order = sorted(t4['order'], key=lambda k: -(t4['runs'][k]['best_val_acc'] - full)
+                   if k != 'full recipe' else -1e9)
+    fig, ax = plt.subplots(1, 2, figsize=(7.4, 2.9))
+
+    names = [k for k in order if k != 'full recipe']
+    del_  = [100*(t4['runs'][k]['best_val_acc'] - full) for k in names]
+    y = np.arange(len(names))
+    bars = ax[0].barh(y, del_, .55, color=['#b91c1c' if d < -3 else '#f59e0b' for d in del_])
+    for i, d in enumerate(del_):
+        ax[0].text(d-0.12, i, '%+.2f' % d, va='center', ha='right', fontsize=8, color='#fff')
+    ax[0].set_yticks(y); ax[0].set_yticklabels(names, fontsize=8); ax[0].invert_yaxis()
+    ax[0].axvline(0, color='#111', lw=1)
+    ax[0].set_xlabel('change in validation accuracy (points)')
+    ax[0].set_title('What each ingredient is worth\n(full recipe = %.2f%%)' % (100*full), fontsize=9)
+    ax[0].grid(alpha=.25, axis='x')
+
+    for k, col in zip(order, ['#111827', '#b91c1c', '#059669', '#2563eb', '#f59e0b']):
+        h = t4['runs'][k]
+        ax[1].plot(range(1, len(h['train_loss'])+1), h['train_loss'], lw=1.7,
+                   color=col, label=k)
+    ax[1].set_yscale('log')
+    ax[1].set_xlabel('epoch'); ax[1].set_ylabel('training loss (log)')
+    ax[1].set_title('Training loss: "minus augment" fits far harder', fontsize=9)
+    ax[1].legend(fontsize=7); ax[1].grid(alpha=.25, which='both')
+    save(fig, 'f_t4')
+    if t4e:
+        print('  test accuracy on record: %.2f%%' % (100*t4e['test_acc']))

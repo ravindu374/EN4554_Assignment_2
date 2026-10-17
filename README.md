@@ -17,8 +17,8 @@ Select the **Python (cnn_gpu)** kernel in Jupyter/VS Code.
 - [x] Setup — splits, normalization, seeds
 - [x] Task 1 — Backpropagation (verified: val acc 50.6%, grad check 3.7e-9)
 - [x] Task 2 — Optimizers (verified: Adam 80.4% best, optimizers match torch.optim)
-- [x] Task 3 — Regularization and residual connections (cells written; run to populate)
-- [x] Task 4 — Best CNN under 500k parameters (cells written; run to populate)
+- [x] Task 3 — Regularization and residual connections — plain-56 degrades (0.7719) vs residual-56 (0.0009)
+- [x] Task 4 — Best CNN under 500k parameters — 90.05% test accuracy, 463,627 params, 20 epochs
 
 ## Notes
 
