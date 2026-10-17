@@ -131,14 +131,24 @@ like a bug but is only rounding. In float64 a correct implementation reaches abo
 
 ### Interpretation — Task 1(b)
 
-Both checks pass. Every layer's `dW` and `db` agree with autograd to within
-$3.3\times10^{-16}$ in absolute terms — essentially one unit in the last place of a float64 — and
-`torch.allclose` returns `True` for all six tensors, so the analytic backward pass computes exactly
-the same function PyTorch's does.
+Both checks pass, and both are now reported as **relative errors in the same layout** so they
+can be read side by side:
+
+| reference method | worst rel. error | median rel. error | verdict |
+|---|---|---|---|
+| autograd | $1.0\times10^{-11}$ | $2.5\times10^{-16}$ | match |
+| centred finite differences | $3.7\times10^{-9}$ | $1.0\times10^{-10}$ | match |
+
+Against autograd the median relative error is $2.5\times10^{-16}$ — one unit in the last place of a
+float64, i.e. identical — and `torch.allclose` returns `True` for all six tensors. The worst case
+reaches $1.0\times10^{-11}$ only because a few gradient entries are themselves near zero, where a
+round-off-sized absolute difference is a large *fraction* of a tiny value; the largest **absolute**
+difference across every tensor is $3.3\times10^{-16}$, confirming there is no real disagreement.
 
 The finite-difference check is the stronger evidence, because it never touches autograd at all: the
 worst relative error over the 72 sampled parameters is $3.7\times10^{-9}$, with medians around
-$10^{-10}$ — the floor set by float64 round-off. That is what a correct gradient looks like; an
+$10^{-10}$ — the floor set by float64 round-off, which no implementation can beat because the
+subtraction in the numerator cancels most of the significant digits. That is what a correct gradient looks like; an
 error of $10^{-3}$ or worse would indicate a real bug.
 
 Two practical points worth recording:

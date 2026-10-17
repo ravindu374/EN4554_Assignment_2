@@ -214,13 +214,28 @@ $$\text{rel err} = \frac{\big|\text{analytic} - \text{numeric}\big|}
                        {\big|\text{analytic}\big| + \big|\text{numeric}\big| + 10^{-12}}$$
 
 <h3>What I measured</h3>
+
+<p>Both checks report the <b>same quantity in the same layout</b>, so they read side by side:</p>
+
 <table>
-<tr><th>Check</th><th>Result</th><th>What it means</th></tr>
-<tr><td>vs autograd</td><td class="num">max difference $3.3\times10^{-16}$</td>
-    <td>Agreement to one unit in the last digit of a 64-bit number. Identical.</td></tr>
-<tr><td>finite differences</td><td class="num">worst $3.7\times10^{-9}$, median $\sim10^{-10}$</td>
-    <td>At the noise floor of 64-bit arithmetic. Correct.</td></tr>
+<tr><th>Reference method</th><th>Worst rel. error</th><th>Median rel. error</th><th>Verdict</th></tr>
+<tr><td>autograd</td><td class="num">$1.0\times10^{-11}$</td>
+    <td class="num">$2.5\times10^{-16}$</td><td>match</td></tr>
+<tr><td>centred finite differences</td><td class="num">$3.7\times10^{-9}$</td>
+    <td class="num">$1.0\times10^{-10}$</td><td>match</td></tr>
 </table>
+
+<div class="box why"><b class="lbl">Why autograd's <i>worst</i> relative error looks larger than its median</b>
+The median relative error against autograd is $2.5\times10^{-16}$ &mdash; one unit in the last digit
+of a 64-bit number, i.e. identical. The worst case reaches $1.0\times10^{-11}$ only because a handful
+of gradient entries are themselves <b>near zero</b>, where a round-off-sized absolute difference is a
+large <i>fraction</i> of a tiny value. The largest <b>absolute</b> difference across every tensor is
+$3.3\times10^{-16}$, which confirms there is no real disagreement. For near-zero entries the median
+is the honest figure.
+<br><br>
+Finite differences sit higher, at $10^{-10}$&ndash;$10^{-9}$, and that is <b>expected rather than a
+defect</b>: the subtraction $L(\theta+\varepsilon)-L(\theta-\varepsilon)$ cancels most of the
+significant digits, setting a noise floor no implementation can beat.</div>
 
 <div class="box trap"><b class="lbl">Two things that make a correct gradient look wrong</b>
 <b>1. Single precision.</b> Run the same check in <code>float32</code> and the relative error
