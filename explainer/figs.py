@@ -24,10 +24,14 @@ def load(name):
     p = os.path.join(RES, name + '.json')
     return json.load(open(p)) if os.path.exists(p) else None
 
+PDF_OUT = os.path.join(ROOT, 'report', 'figures')
+os.makedirs(PDF_OUT, exist_ok=True)
+
 def save(fig, name):
-    fig.savefig(os.path.join(OUT, name + '.svg'), format='svg')
+    fig.savefig(os.path.join(OUT, name + '.svg'), format='svg')      # for the HTML explainer
+    fig.savefig(os.path.join(PDF_OUT, name + '.pdf'), format='pdf')  # for the LaTeX report
     plt.close(fig)
-    print('  wrote', name + '.svg')
+    print('  wrote', name + '.svg + .pdf')
 
 
 # ---------------------------------------------------------------- Task 1(c)

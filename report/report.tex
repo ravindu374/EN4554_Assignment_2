@@ -1,0 +1,688 @@
+% EN4554 Assignment 2 - Report
+% Compile with: pdflatex report.tex  (run twice for references)
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------- figures
+% Figures live in figures/ as PDF. If a file is missing, a labelled grey box
+% is drawn instead, so the report always compiles.
+\graphicspath{{figures/}}
+
+\newcommand{\figbox}[1]{%
+  \fcolorbox{gray!50}{gray!8}{%
+    \begin{minipage}[c][4.5cm][c]{0.92\linewidth}
+      \centering\small\texttt{\detokenize{figures/#1.pdf}}\\[2pt]
+      \itshape(figure not found -- place the file here)
+    \end{minipage}}%
+}
+
+% \fig{filename}{width fraction}{caption}
+\newcommand{\fig}[3]{%
+  \begin{figure}[H]
+    \centering
+    \IfFileExists{figures/#1.pdf}{\includegraphics[width=#2\linewidth]{#1}}{\figbox{#1}}
+    \caption{#3}
+    \label{fig:#1}
+  \end{figure}%
+}
+
+% ---------------------------------------------------------------- code style
+\definecolor{codebg}{RGB}{247,249,252}
+\definecolor{codekw}{RGB}{164,36,154}
+\definecolor{codestr}{RGB}{26,127,55}
+\definecolor{codecom}{RGB}{107,122,153}
+
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{codekw},
+  stringstyle=\color{codestr},
+  commentstyle=\itshape\color{codecom},
+  numbers=none,
+  frame=leftline,
+  framerule=1.2pt,
+  rulecolor=\color{gray!60},
+  framesep=6pt,
+  xleftmargin=8pt,
+  breaklines=true,
+  showstringspaces=false,
+  captionpos=b,
+  aboveskip=1em,
+  belowskip=1em,
+}
+\lstset{style=py}
+
+\captionsetup{font=small}
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+% ---------------------------------------------------------------- title
+\title{\vspace{-1.5cm}\textbf{EN4554 --- Assignment 2 on CNNs}}
+\author{Lakshan R.G.R \\ Index: 220355M}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\small
+GitHub: \url{https://github.com/ravindu374/EN4554_Assignment_2}
+\end{center}
+
+\vspace{-0.5em}
+\hrule
+\vspace{1em}
+
+% =====================================================================
+\section{Setup}
+
+All experiments use CIFAR-10. The 50{,}000 training images are split once into
+45{,}000 for training and 5{,}000 for validation using a fixed permutation, and
+this split is reused everywhere so results stay comparable. Images are
+normalised per channel,
+%
+\begin{equation}
+x' = \frac{x - \mu_c}{\sigma_c},
+\end{equation}
+%
+with $\mu_c$ and $\sigma_c$ computed from the training split only, so no
+information leaks out of validation or test. Measured values were
+$\mu = (0.4912, 0.4820, 0.4464)$ and $\sigma = (0.2472, 0.2436, 0.2617)$. All
+random seeds are fixed. The test set is read exactly once, in Task 4.
+
+The whole dataset is held on the GPU as \texttt{uint8} (138\,MB) and normalised
+per batch, which removes \texttt{DataLoader} worker overhead. Every experiment
+writes its history to \texttt{results/*.json}, so plots can be regenerated
+without retraining.
+
+% =====================================================================
+\section{Task 1: Backpropagation}
+
+\subsection{Implementation}
+
+Each layer stores what its backward pass needs during the forward pass. For a
+linear layer $y = xW + b$ with incoming gradient $g = \partial L/\partial y$:
+%
+\begin{equation}
+\frac{\partial L}{\partial x} = g W^{\!\top}, \qquad
+\frac{\partial L}{\partial W} = x^{\!\top} g, \qquad
+\frac{\partial L}{\partial b} = \sum_{n=1}^{N} g_n .
+\end{equation}
+%
+ReLU acts as a gate, passing gradient only where it passed signal:
+$\partial L/\partial x = g \odot \mathbb{1}[x>0]$.
+
+Softmax and cross-entropy are implemented as a single fused block. For logits
+$z \in \mathbb{R}^{N \times C}$ and labels $y$,
+%
+\begin{equation}
+L = \frac{1}{N}\sum_{n}\Big(\log \textstyle\sum_c e^{z_{nc}} - z_{n y_n}\Big),
+\qquad
+\frac{\partial L}{\partial z} = \frac{1}{N}\big(\mathrm{softmax}(z) - \mathrm{onehot}(y)\big).
+\end{equation}
+%
+The gradient reduces to \emph{predicted probability minus true probability}:
+all terms of the softmax Jacobian cancel against the logarithm. This is why the
+two are always fused. The row maximum is subtracted before exponentiating,
+since $e^{z}$ overflows above $z \approx 88$ in single precision.
+
+\begin{lstlisting}[caption={Linear layer and the reverse sweep -- no autograd.}]
+class Linear:
+    def forward(self, x):
+        self.x = x                  # needed for dL/dW
+        return x @ self.W + self.b
+
+    def backward(self, g):
+        self.dW = self.x.T @ g      # (in,N) @ (N,out) -> (in,out)
+        self.db = g.sum(dim=0)      # bias broadcast over the batch
+        return g @ self.W.T         # pass gradient down
+
+class MLP:
+    def backward(self, g):
+        for layer in reversed(self.layers):
+            g = layer.backward(g)
+\end{lstlisting}
+
+\subsection{Gradient verification}
+
+Both checks report the same quantity,
+%
+\begin{equation}
+\mathrm{rel} = \frac{|\text{analytic} - \text{reference}|}
+                    {|\text{analytic}| + |\text{reference}| + 10^{-12}},
+\end{equation}
+%
+so they can be compared directly. Both run in \texttt{float64}. The
+finite-difference estimate is centred,
+$\partial L/\partial\theta \approx [L(\theta+\varepsilon)-L(\theta-\varepsilon)]/2\varepsilon$
+with $\varepsilon = 10^{-5}$, because its error is $\mathcal{O}(\varepsilon^2)$
+rather than $\mathcal{O}(\varepsilon)$.
+
+\begin{table}[H]
+\centering\small
+\caption{Relative error of the hand-written gradients against each reference.}
+\begin{tabular}{lccc}
+\toprule
+Reference method & Worst rel.\ error & Median rel.\ error & Verdict \\
+\midrule
+Autograd                    & $1.0\times10^{-11}$ & $2.5\times10^{-16}$ & match \\
+Centred finite differences   & $3.7\times10^{-9}$  & $1.0\times10^{-10}$ & match \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\texttt{torch.allclose} returns \texttt{True} for all six gradient tensors. The
+worst relative error against autograd exceeds its median only because a few
+gradient entries are themselves near zero, where a round-off-sized absolute
+difference is a large fraction of a tiny value; the largest \emph{absolute}
+difference is $3.3\times10^{-16}$. Finite differences sit near $10^{-10}$
+because the subtraction in the numerator cancels most significant digits --
+this is a noise floor, not a defect.
+
+Two practical notes. In \texttt{float32} the same check gives relative errors
+near $10^{-3}$, which looks like a bug but is only rounding. Also, ReLU is not
+differentiable at zero, so a pre-activation lying within $\varepsilon$ of zero
+can report a large error even when the code is correct.
+
+\subsection{Training on flattened images}
+
+Each image is flattened to 3072 values and fed to a 3072--512--256--10 network
+trained with hand-written SGD.
+
+\fig{f_t1c}{1.0}{Training loss and accuracy. The loss starts near
+$\ln 10 = 2.303$, which is what a network that knows nothing must output, and
+falls to 0.157. Validation accuracy stalls near 50\% while training accuracy
+reaches 94.8\%.}
+
+The network reaches \textbf{50.6\%} best validation accuracy with 1{,}707{,}274
+parameters, and overfits heavily: training accuracy ends 46 points higher.
+
+The ceiling matters more than the gap. A fully-connected network cannot get far
+past 50--55\% on CIFAR-10 regardless of width or training time, because
+flattening destroys locality -- neighbouring pixels become unrelated inputs --
+and there is no translation invariance, so a shifted object is an entirely new
+input vector. The first layer alone costs $3072 \times 512$ weights and still
+sees only one fixed pixel arrangement. This is precisely the gap convolution
+closes.
+
+\subsection{Gradient norms at initialisation}
+
+A 10-layer network is given one forward and backward pass at initialisation,
+recording $\lVert \partial L/\partial W^{(l)} \rVert$ per layer. Each
+activation is paired with the initialiser designed for it: Xavier for sigmoid,
+Kaiming for ReLU.
+
+\fig{f_t1d}{0.72}{Per-layer gradient norms, logarithmic axis. Sigmoid
+gradients shrink by a factor of about $9.4\times10^{4}$ on the way back to
+layer 1; ReLU gradients stay flat.}
+
+Sigmoid collapses because $\sigma'(x) = \sigma(x)(1-\sigma(x)) \le 1/4$, with
+equality only at $x=0$. Backpropagation multiplies by one such factor per
+layer, so after nine hidden layers the signal is scaled by at most
+$(1/4)^9 \approx 4\times10^{-6}$, and in practice far less. The early layers
+receive almost no learning signal -- the classic vanishing gradient problem.
+
+ReLU stays flat because its derivative is exactly $0$ or $1$ and never shrinks
+what passes through. About half the units are inactive, costing a factor of two
+in variance per layer, and Kaiming initialisation restores exactly that factor
+by setting $\mathrm{Var}[W] = 2/\text{fan-in}$. The $2$ in the numerator
+\emph{is} the ReLU correction, which is why the activation and the initialiser
+must be chosen together.
+
+In the ReLU curve layer 1 has the largest norm, but that is a size effect: its
+weight matrix is $3072 \times 128$ while the others are $128 \times 128$.
+
+% =====================================================================
+\section{Task 2: Optimizers}
+
+\subsection{Implementation and verification}
+
+Both optimizers subclass \texttt{torch.optim.Optimizer}, looping over
+\texttt{param\_groups} and keeping per-parameter state in \texttt{self.state}.
+Momentum accumulates a velocity, $b_t = \mu b_{t-1} + g_t$, which builds to
+$1/(1-\mu) = 10$ along consistent directions while cancelling on directions
+that alternate. Adam keeps a running mean and variance and divides one by the
+square root of the other:
+%
+\begin{equation}
+m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t, \qquad
+v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2,
+\end{equation}
+\begin{equation}
+\theta_{t+1} = \theta_t - \eta \,
+\frac{m_t / (1-\beta_1^{\,t})}{\sqrt{v_t / (1-\beta_2^{\,t})} + \epsilon}.
+\end{equation}
+%
+Bias correction is necessary because $m$ and $v$ start at zero: at $t=1$,
+$m_1 = (1-\beta_1) g_1$ is ten times too small, and dividing by
+$1-\beta_1^{\,t}$ restores it exactly.
+
+\begin{lstlisting}[caption={Adam's update, with bias correction.}]
+m.mul_(b1).add_(g, alpha=1 - b1)          # first moment
+v.mul_(b2).addcmul_(g, g, value=1 - b2)   # second moment
+bc1, bc2 = 1 - b1 ** t, 1 - b2 ** t       # bias corrections
+denom = (v / bc2).sqrt_().add_(eps)
+p.addcdiv_(m / bc1, denom, value=-lr)
+\end{lstlisting}
+
+Two details are needed to match PyTorch: the momentum buffer is initialised to
+the gradient itself rather than zero, and weight decay is folded into the
+gradient as $g \leftarrow g + \lambda\theta$ before the moments are updated.
+
+\begin{table}[H]
+\centering\small
+\caption{Maximum parameter difference against \texttt{torch.optim} after 50
+steps in \texttt{float64}, from identical initial weights and data.}
+\begin{tabular}{lcc}
+\toprule
+Configuration & Max difference & \texttt{allclose} \\
+\midrule
+SGD (plain)                     & $0.0$               & yes \\
+SGD + momentum 0.9              & $0.0$               & yes \\
+SGD + momentum + weight decay    & $0.0$               & yes \\
+Adam                            & $4.2\times10^{-17}$ & yes \\
+Adam, $\beta = (0.8, 0.99)$      & $5.6\times10^{-17}$ & yes \\
+Adam + weight decay             & $2.8\times10^{-17}$ & yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The SGD variants are bit-for-bit identical. Adam differs at the seventeenth
+digit because PyTorch evaluates $\sqrt{v}/\sqrt{1-\beta_2^t}$ where the
+implementation above evaluates $\sqrt{v/(1-\beta_2^t)}$ -- algebraically the
+same, but a different order of floating-point operations.
+
+\subsection{Trajectories on an ill-conditioned quadratic}
+
+For $f(x,y) = \tfrac12(x^2 + 50y^2)$ the gradient is $(x, 50y)$, so the surface
+is fifty times steeper in $y$. Gradient descent multiplies the $y$ error by
+$(1-50\eta)$ each step and therefore only converges while $\eta < 2/50 = 0.04$,
+but along $x$ it multiplies by $(1-\eta)$, so progress in the direction that
+matters is slow. The steep direction dictates the step size.
+
+\fig{f_t2b}{1.0}{Trajectories from $(-9,1)$ over 60 steps. SGD and momentum use
+$\eta = 0.038$, just under the stability limit; Adam uses $\eta = 0.3$ because
+its normalised step is roughly $\eta$ regardless of gradient magnitude.}
+
+\begin{table}[H]
+\centering\small
+\caption{Behaviour on the narrow valley.}
+\begin{tabular}{lcc}
+\toprule
+Optimizer & Sign changes in $y$ & Final $f$ \\
+\midrule
+SGD              & 60 of 60 & 0.388 \\
+SGD + momentum   & 30       & 0.058 \\
+Adam             & 6        & 0.109 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SGD changes direction on every step: with $\eta = 0.038$ the $y$ error is
+multiplied by $-0.9$, flipping sign while shrinking only 10\%, and $x$ crawls
+from $-9$ to $-0.88$. Momentum halves the oscillation and travels five times
+further at the same learning rate, because alternating components cancel in the
+velocity buffer while consistent ones accumulate. Adam barely oscillates, since
+dividing by $\sqrt{\hat v}$ normalises each coordinate by its own gradient
+history and makes the conditioning largely irrelevant.
+
+Momentum reaches the lowest final value. On a clean convex problem, well-tuned
+momentum is hard to beat; Adam's advantage appears when gradients are noisy and
+badly scaled, as in the next section.
+
+\subsection{Learning-rate sensitivity}
+
+A small CNN with batch norm (141{,}034 parameters) is trained for 15 epochs with
+each optimizer at the same three learning rates, so that the position and
+sharpness of each peak can be read off directly.
+
+\fig{f_t2c}{0.72}{Best validation accuracy against learning rate. Adam peaks
+inside the grid; both SGD variants are still rising at the right edge.}
+
+\begin{table}[H]
+\centering\small
+\caption{Best validation accuracy (\%) after 15 epochs.}
+\begin{tabular}{lcccc}
+\toprule
+Optimizer & $\eta = 0.001$ & $\eta = 0.01$ & $\eta = 0.1$ & Spread \\
+\midrule
+SGD            & 42.76 & 62.54 & \textbf{71.58} & \textbf{28.8} \\
+SGD + momentum & 64.22 & 75.28 & \textbf{79.14} & 14.9 \\
+Adam           & 76.78 & \textbf{80.40} & 69.14 & 11.3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Sensitivity is the main result. Plain SGD swings 28.8 points across the grid and
+is nearly useless at $\eta = 0.001$, while Adam varies by only 3.6 points
+between $\eta = 0.001$ and $\eta = 0.01$. A careless learning rate costs almost
+nothing with Adam and close to thirty points with plain SGD, which is why Adam
+is the usual default when there is no budget for tuning.
+
+Adam is nevertheless the only optimizer that fails outright, collapsing by 11
+points at $\eta = 0.1$: its step is about $\eta$ per parameter irrespective of
+gradient size, so updates become as large as the weights themselves.
+
+Both SGD curves are still rising at $\eta = 0.1$, so this grid does not bracket
+their optima and 71.58\% should be read as a lower bound. The tenfold
+amplification from momentum is visible at matched quality instead: momentum at
+$\eta = 0.01$ reaches 75.28\%, beating plain SGD at $\eta = 0.1$ (71.58\%) with
+one tenth of the learning rate.
+
+Finally, this CNN reaches 80.40\% with 141{,}034 parameters where the Task 1 MLP
+reached 50.6\% with 1{,}707{,}274 -- twelve times fewer parameters for thirty
+points more accuracy.
+
+% =====================================================================
+\section{Task 3: Regularization and residual connections}
+
+\subsection{Regularization on 5{,}000 images}
+
+The training set is reduced to 5{,}000 images, because with all 45{,}000 a
+141k-parameter network barely overfits and the effect would be too small to
+measure. Cutout zeroes a random $8\times8$ square after normalisation, so the
+hole takes the mean colour. Mixup blends two images and their labels in the
+same proportion,
+%
+\begin{equation}
+\tilde x = \lambda x_i + (1-\lambda) x_j, \qquad
+L = \lambda\,\mathrm{CE}(f(\tilde x), y_i) + (1-\lambda)\,\mathrm{CE}(f(\tilde x), y_j),
+\end{equation}
+%
+with $\lambda \sim \mathrm{Beta}(1,1)$, forcing linear behaviour between
+training examples rather than overconfident predictions in the gaps.
+
+\fig{f_augment}{1.0}{Each augmentation applied to one image. Flip and crop
+produce images that are still clearly the same object; cutout hides evidence;
+mixup produces an image that does not exist, labelled in two classes.}
+
+\begin{lstlisting}[caption={Cutout and mixup, batched on the GPU.}]
+def apply_cutout(x, length, gen):
+    cy = torch.randint(0, 32, (x.shape[0],), device=DEVICE, generator=gen)
+    cx = torch.randint(0, 32, (x.shape[0],), device=DEVICE, generator=gen)
+    half = length // 2
+    my = (ARANGE32[None,:] >= cy[:,None]-half) & (ARANGE32[None,:] < cy[:,None]+half)
+    mx = (ARANGE32[None,:] >= cx[:,None]-half) & (ARANGE32[None,:] < cx[:,None]+half)
+    hole = my[:,:,None] & mx[:,None,:]
+    return x * (~hole)[:,None,:,:]
+
+def mixup_batch(x, y, alpha, gen, rng):
+    lam  = float(rng.beta(alpha, alpha))
+    perm = torch.randperm(x.shape[0], device=DEVICE, generator=gen)
+    return lam * x + (1 - lam) * x[perm], y, y[perm], lam
+\end{lstlisting}
+
+Training accuracy is always measured on clean, unaugmented images in a separate
+pass. Measuring it on augmented batches would make mixup's figure a different
+quantity and the gap column meaningless.
+
+\begin{table}[H]
+\centering\small
+\caption{Seven configurations after 80 epochs on 5{,}000 images.}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & Train (\%) & Val (\%) & Gap & Best val (\%) \\
+\midrule
+Baseline      & 100.00 & 67.36 & 32.6 & 67.36 \\
+Weight decay  & 100.00 & 68.08 & 31.9 & 68.42 \\
+Dropout       & 100.00 & 67.44 & 32.6 & 67.80 \\
+Flip + crop   & 83.10  & 65.72 & 17.4 & \textbf{70.88} \\
+Cutout        & 98.06  & 63.94 & 34.1 & 67.94 \\
+Mixup         & 99.46  & 62.94 & 36.5 & 65.46 \\
+All combined  & 72.56  & 65.02 & \textbf{7.5} & 68.82 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\fig{f_t3a}{1.0}{Train versus validation accuracy, and the generalisation gap.}
+
+The training column gives the clearest result: baseline, weight decay and
+dropout all reach exactly 100.00\%, memorising every image despite the
+regularization. Only the methods that change the data prevent this. On this
+dataset, constraining the weights barely helped while changing the images did.
+
+Dropout contributed almost nothing because it sits only after global average
+pooling, on a 128-dimensional vector -- far weaker than dropout between
+convolutional layers. That is a consequence of placement, not of the method.
+
+Two results deserve comment. Mixup \emph{reduced} accuracy by 1.9 points: with
+$\alpha = 1$ on only 5{,}000 images nearly every training image is a blend and
+the network sees little clean signal. And ``all combined'' is not the best
+configuration -- it has by far the smallest gap (7.5 points) but only 68.82\%,
+below flip and crop alone at 70.88\%, with training accuracy down to 72.56\%.
+Five regularizers over-constrain a small network, which is underfitting rather
+than successful regularization. Closing the gap is not the same as generalising
+better.
+
+\subsection{Plain versus residual networks}
+
+Networks follow the CIFAR ResNet form: a stem convolution, three stages of $n$
+blocks at 16/32/64 channels, global average pooling and a linear head, giving
+depth $6n+2$. Shortcuts use Option A -- stride subsampling with zero-padded
+channels -- which has no parameters, so the two families have identical
+parameter counts and the only difference is one addition.
+
+\begin{lstlisting}[caption={The only difference between the two families.}]
+def forward(self, x):
+    out = F.relu(self.b1(self.c1(x)))
+    out = self.b2(self.c2(out))
+    if self.residual:
+        out = out + self.shortcut(x)   # <-- the only difference
+    return F.relu(out)
+\end{lstlisting}
+
+No augmentation is used here. The question is whether a deep network can be
+optimised, so the networks are allowed to fit the training data as hard as they
+can and the training losses are compared directly.
+
+\begin{table}[H]
+\centering\small
+\caption{Final training loss after 30 epochs. Parameter counts are identical
+within each depth.}
+\begin{tabular}{lccc}
+\toprule
+Network & Parameters & Final train loss & Val (\%) \\
+\midrule
+Plain-8     & 75{,}290  & 0.0617 & 79.40 \\
+Residual-8  & 75{,}290  & 0.0641 & 79.10 \\
+Plain-20    & 269{,}722 & 0.0037 & 82.56 \\
+Residual-20 & 269{,}722 & 0.0017 & 83.16 \\
+Plain-56    & 853{,}018 & \textbf{0.7719} & 57.72 \\
+Residual-56 & 853{,}018 & \textbf{0.0009} & 80.78 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\fig{f_t3b}{1.0}{Training loss per epoch, logarithmic axis. The 56-layer plain
+network gets stuck well above its own 20-layer version.}
+
+\fig{f_t3b_summary}{0.62}{Final training loss against depth. Deeper always
+helps the residual family; for the plain family, 20 to 56 layers makes training
+loss 200 times worse.}
+
+The plain network breaks at depth 56: its training loss rises from 0.0037 to
+0.7719, roughly 200 times worse, despite having three times more parameters.
+The residual network at the same depth and parameter count reaches 0.0009, a
+factor of about 860 better.
+
+This is not overfitting. Overfitting means low training loss with poor
+validation accuracy, whereas here the training loss itself is bad, on data the
+network is being fitted to. A 56-layer network can represent anything a
+20-layer one can, by setting the extra layers to the identity, so it has
+strictly more capacity and must be able to match plain-20. It fails to, so the
+capacity exists and gradient descent cannot reach it. This is the degradation
+problem.
+
+A residual block computes $x + F(x)$, so representing the identity only requires
+driving $F$ to zero, which weight decay does readily. A plain block must learn
+to reproduce its input before improving on it. The shortcut also gives the
+gradient a path of derivative exactly one back to earlier layers -- the clean
+route that Task 1(d) showed sigmoid lacked.
+
+At depth 8 the two families are effectively tied, with plain marginally ahead.
+That confirms the benefit is specifically about depth and is not free at any
+size. Residual-56 also reached the lowest training loss of all six networks but
+not the best validation accuracy, which belongs to residual-20; with 30 epochs
+and no augmentation the deepest network fits hardest and generalises slightly
+worse.
+
+% =====================================================================
+\section{Task 4: Best CNN under 500k parameters}
+
+\subsection{Design}
+
+Twenty epochs is the binding constraint. Task 3(b) showed that at 30 epochs a
+56-layer network had still not overtaken a 20-layer one on validation accuracy,
+so the design starts from depth 20 and spends the remaining budget on width.
+
+\begin{table}[H]
+\centering\small
+\caption{Choosing the widest configuration that fits the budget.}
+\begin{tabular}{lccc}
+\toprule
+Channels & Depth & Parameters & Fits 500k \\
+\midrule
+16 / 32 / 64          & 20 & 269{,}722 & yes, 46\% unused \\
+\textbf{21 / 42 / 84} & \textbf{20} & \textbf{463{,}627} & \textbf{yes, 92.7\% used} \\
+22 / 44 / 88          & 20 & 508{,}672 & no \\
+24 / 48 / 96          & 14 & 386{,}626 & yes, but shallower \\
+20 / 40 / 80          & 26 & 572{,}430 & no \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The final recipe is a residual network of depth 20 with widths 21/42/84, trained
+with SGD and momentum 0.9, learning rate 0.1 annealed to zero by a cosine
+schedule, weight decay $5\times10^{-4}$, and flip, crop and cutout augmentation,
+at batch size 128 for 20 epochs. Every ingredient except the schedule comes from
+an earlier task; cosine annealing is used because a 20-epoch budget leaves no
+room for a step schedule's plateaus.
+
+\subsection{Ablation}
+
+Each row removes exactly one ingredient and changes nothing else.
+
+\begin{table}[H]
+\centering\small
+\caption{Ablation of four design choices, ranked by cost of removal.}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Best val (\%) & Change & Final train loss \\
+\midrule
+Full recipe          & \textbf{89.60} & ---              & 0.2281 \\
+Minus augmentation   & 85.48 & $\mathbf{-4.12}$ & \textbf{0.0047} \\
+Adam instead of SGD  & 86.90 & $-2.70$          & 0.3284 \\
+Minus shortcut       & 87.56 & $-2.04$          & 0.3228 \\
+Minus weight decay   & 87.58 & $-2.02$          & 0.2848 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\fig{f_t4}{1.0}{What each ingredient contributes, and training loss per epoch.
+The curve for ``minus augmentation'' falls far below the others while scoring
+worst on validation.}
+
+Augmentation matters roughly twice as much as anything else, and the training
+loss explains why: without it the loss falls to 0.0047, about 48 times lower
+than the full recipe, while validation accuracy drops four points. Fitting the
+training data much better and the held-out data much worse is the signature of
+overfitting.
+
+Removing the shortcut works through a different mechanism. Training loss rises
+to 0.3228, so the plain network fits the training data \emph{less} well -- an
+optimisation cost rather than a generalisation one, consistent with Task 3(b).
+Both variants have identical parameter counts. The effect is smaller than at
+depth 56 because depth 20 is comfortably trainable without shortcuts.
+
+Shortcut and weight decay differ by only 0.02 points and should be treated as
+tied rather than ranked, since that is well below run-to-run variation from a
+single seed. SGD beat Adam here, reversing Task 2(c): Adam's strength is
+tolerance of a poorly chosen learning rate, but once the rate is well chosen and
+annealed, tuned momentum overtakes it, and Adam also ends at a higher training
+loss.
+
+\subsection{Final result}
+
+\begin{table}[H]
+\centering\small
+\caption{Final model, with the test set evaluated once.}
+\begin{tabular}{ll}
+\toprule
+Architecture & Residual, depth 20, widths 21/42/84 \\
+Parameters   & 463{,}627 of 500{,}000 allowed (92.7\%) \\
+Epochs       & 20 of 20 allowed \\
+Validation accuracy & 89.60\% \\
+\textbf{Test accuracy} & \textbf{90.05\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Test accuracy came in 0.45 points above validation. The validation split
+absorbed every design decision and therefore carries some optimistic bias, but
+with only five configurations compared that bias is evidently smaller than the
+difference between the two splits; the test set is also twice the size and so
+the less noisy measurement. The evaluation is cached, so re-running the notebook
+reads the stored value rather than measuring again -- once a test number
+influences a decision it stops being a held-out estimate.
+
+The binding constraint was epochs, not parameters: the final training loss is
+0.2281 and the validation curve is still rising at epoch 20, so the model is
+underfitted. With more budget the order worth trying is longer training first,
+then more width, and more depth last.
+
+% =====================================================================
+\section{Conclusion}
+
+\begin{table}[H]
+\centering\small
+\caption{Progression across the four tasks.}
+\begin{tabular}{llcc}
+\toprule
+Task & Model & Parameters & Accuracy \\
+\midrule
+1(c) & MLP on flattened pixels     & 1{,}707{,}274 & 50.6\% val \\
+2(c) & Small CNN, tuned optimizer   & 141{,}034     & 80.4\% val \\
+3(b) & Residual-20, no augmentation & 269{,}722     & 83.2\% val \\
+4    & Residual net, full recipe    & 463{,}627     & \textbf{90.1\% test} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Task 1 showed that a fully-connected network cannot exceed roughly half on
+images, because flattening discards locality and translation invariance. Task 2
+showed that the choice of optimizer and learning rate is worth tens of points on
+the same architecture, and that Adam's main practical value is insensitivity to
+that choice. Task 3 separated two distinct failures -- memorisation from too
+little data, fixed by changing the data, and untrainability from too many
+layers, fixed by shortcuts. Task 4 combined these under a fixed budget.
+
+The recurring theme is that structure matters more than size. The final model
+has 3.7 times fewer parameters than the Task 1 MLP and is 39 points more
+accurate, because convolution, residual connections and augmentation each encode
+something true about images that the first network had to learn from data and
+could not.
+
+% =====================================================================
+\section*{Acknowledgement of AI tool use}
+
+Claude (Anthropic) was used as a coding assistant while preparing the notebook:
+scaffolding the layer classes, the gradient-checking harness and the plotting
+code. All implementations were reviewed, executed and verified by me, and the
+interpretation of the results is my own. I understand every line of the
+submitted code.
+
+\end{document}
