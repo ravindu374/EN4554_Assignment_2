@@ -1,0 +1,241 @@
+<h1 class="pb">3. Task 2 &mdash; Optimizers</h1>
+
+<div class="box q"><b class="lbl">What the assignment asked</b>
+<b>(a)</b> Implement SGD with momentum and Adam (with bias correction) as
+<code>torch.optim.Optimizer</code> subclasses. Show that they match <code>torch.optim.SGD</code>
+and <code>torch.optim.Adam</code>.<br>
+<b>(b)</b> On $f(x,y)=\frac12(x^2+50y^2)$, plot the trajectories of SGD, SGD with momentum and
+Adam. Use <code>contour</code> to plot the contours. Explain the differences.<br>
+<b>(c)</b> Train a small CNN with each optimizer at three learning rates each. Plot validation
+accuracy versus learning rate and the training loss at the best rate. Discuss sensitivity.</div>
+
+<h2>3.1 The idea: the direction is obvious, the step size is not</h2>
+
+<p>Backpropagation tells us which way is downhill. It does <i>not</i> tell us how far to step, or
+whether to remember where we were going. That is the optimizer's job, and Task 1 used the most
+naive possible choice: step straight downhill, every time.</p>
+
+<h2>3.2 The mathematics &mdash; three update rules</h2>
+
+<p>$g_t$ is the gradient at step $t$, $\theta$ a parameter, $\eta$ the learning rate.</p>
+
+<h3>Plain SGD</h3>
+$$\theta_{t+1} = \theta_t - \eta\,g_t$$
+<p>Step downhill. Nothing is remembered between steps.</p>
+
+<h3>SGD with momentum</h3>
+$$b_t = \mu\,b_{t-1} + g_t \qquad\qquad \theta_{t+1} = \theta_t - \eta\,b_t$$
+
+<p>Instead of using the raw gradient, keep a running "velocity" $b$. Think of a ball rolling
+downhill rather than a walker taking independent steps.</p>
+
+<div class="box key"><b class="lbl">Why momentum speeds things up &mdash; the key sum</b>
+If the gradient keeps pointing the same way, $b$ builds up as a geometric series:
+$$1 + \mu + \mu^2 + \cdots = \frac{1}{1-\mu}$$
+With the usual $\mu = 0.9$ that is a <b>tenfold amplification</b> along directions that stay
+consistent. Directions that keep <i>flipping sign</i> cancel themselves out instead. So momentum
+accelerates steady progress and damps oscillation &mdash; which is exactly what the valley picture
+below shows.</div>
+
+<div class="box trap"><b class="lbl">Two ways of writing momentum &mdash; both correct</b>
+Textbooks often write the buffer as a weighted average, with a $(1-\mu)$ in front:
+$$b_t = \mu\,b_{t-1} + (1-\mu)\,g_t \qquad\text{(EMA form)}$$
+<b>This is the same algorithm.</b> The two buffers differ by exactly the constant factor
+$(1-\mu)$, which is absorbed into the learning rate: the EMA form at $\eta/(1-\mu)$ gives
+<i>numerically identical</i> parameters to the form above at $\eta$. I verified this in the
+notebook &mdash; they agree to $8\times10^{-17}$.
+<br><br>
+The only difference is what $\eta$ means. On a constant gradient the EMA form moves $\eta$ per
+step; PyTorch's form moves $\eta/(1-\mu) = 10\eta$ per step. I used PyTorch's form because
+part (a) requires matching <code>torch.optim.SGD</code>, whose default is this one.
+<br><br>
+<b>And note my Adam <i>does</i> use the $(1-\beta)$ form</b> &mdash; because Adam is defined that
+way, and its bias correction only makes sense for a weighted average whose weights sum to 1.</div>
+
+<h3>Adam</h3>
+<p>Keep a running mean <i>and</i> a running variance of the gradient, then divide one by the
+square root of the other:</p>
+
+$$m_t = \beta_1 m_{t-1} + (1-\beta_1)\,g_t
+\qquad
+v_t = \beta_2 v_{t-1} + (1-\beta_2)\,g_t^{2}$$
+
+$$\hat m_t = \frac{m_t}{1-\beta_1^{\,t}}
+\qquad
+\hat v_t = \frac{v_t}{1-\beta_2^{\,t}}
+\qquad
+\theta_{t+1} = \theta_t - \eta\,\frac{\hat m_t}{\sqrt{\hat v_t}+\epsilon}$$
+
+<div class="box key"><b class="lbl">What the division buys you</b>
+Dividing by $\sqrt{\hat v}$ makes the step <b>scale-free</b>. Each parameter is normalised by its
+own recent gradient size, so the step is roughly $\eta$ whether that parameter's gradients are
+huge or tiny. That is what makes Adam forgiving about badly scaled problems &mdash; and, as part
+(c) shows, forgiving about the learning rate too.</div>
+
+<div class="box why"><b class="lbl">Why bias correction is needed (the $1-\beta^t$ terms)</b>
+$m$ and $v$ both start at <b>zero</b>, so early on they are biased towards zero. At $t=1$,
+$m_1 = (1-\beta_1)g_1 = 0.1\,g_1$ &mdash; ten times too small. Dividing by $1-\beta_1^{\,t}$ undoes
+exactly this: at $t=1$ it divides by $0.1$, restoring $m_1 = g_1$, and the correction fades to 1
+as $t$ grows. Without it the first few hundred steps are far too small, because with
+$\beta_2 = 0.999$ the term $1-\beta_2^{\,t}$ needs roughly a thousand steps to approach 1.</div>
+
+<h2>3.3 The code &mdash; what each cell does</h2>
+
+<table>
+<tr><th style="width:15%">Cell</th><th style="width:26%">What it defines</th><th>What it is doing</th></tr>
+<tr><td><span class="cellref">code 12</span></td><td><code>MySGD</code>, <code>MyAdam</code></td>
+    <td>Both subclass <code>torch.optim.Optimizer</code>. That means two obligations: pass the
+    defaults to <code>super().__init__</code>, and loop over <code>self.param_groups</code> rather
+    than a flat list, so per-group learning rates and schedulers work. Per-parameter state
+    ($m$, $v$, the step count, the momentum buffer) lives in <code>self.state[p]</code>.</td></tr>
+<tr><td><span class="cellref">code 13</span></td><td><code>PureEMAMomentum</code></td>
+    <td>The $(1-\mu)$ form, used to demonstrate the two conventions are equivalent.</td></tr>
+<tr><td><span class="cellref">code 14</span></td><td><code>compare_optimizers</code></td>
+    <td>Trains two identical networks &mdash; same seed, same data, same order &mdash; one with my
+    optimizer, one with PyTorch's, then compares every parameter.</td></tr>
+<tr><td><span class="cellref">code 15&ndash;16</span></td><td><code>trajectory</code> + contour plot</td>
+    <td>Runs each optimizer on the 2-D test function and records the path.</td></tr>
+<tr><td><span class="cellref">code 17&ndash;19</span></td><td><code>SmallCNN</code>, the sweep, the plots</td>
+    <td>Nine training runs: 3 optimizers &times; 3 learning rates.</td></tr>
+</table>
+
+<div class="box trap"><b class="lbl">Two implementation details that must match PyTorch exactly</b>
+<b>1.</b> The momentum buffer is initialised to <b>the gradient itself</b>, not to zero. Starting
+from zero would make the first step $\eta(1-\mu)g$ instead of $\eta g$.<br>
+<b>2.</b> Weight decay is folded into the gradient <i>first</i>, as
+$g \leftarrow g + \lambda\theta$. This is classic L2 and is what <code>torch.optim</code> does.
+It is <b>not</b> the same as AdamW's decoupled decay &mdash; apply it afterwards and the numbers
+disagree visibly.</div>
+
+<h3>Result of part (a)</h3>
+<table>
+<tr><th>Configuration</th><th>Max difference after 50 steps</th><th>Match?</th></tr>
+<tr><td>SGD (plain)</td><td class="num">0.000e+00</td><td>bit-for-bit identical</td></tr>
+<tr><td>SGD + momentum 0.9</td><td class="num">0.000e+00</td><td>bit-for-bit identical</td></tr>
+<tr><td>SGD + momentum + weight decay</td><td class="num">0.000e+00</td><td>bit-for-bit identical</td></tr>
+<tr><td>Adam</td><td class="num">4.2e&minus;17</td><td>yes</td></tr>
+<tr><td>Adam, $\beta=(0.8,0.99)$</td><td class="num">5.6e&minus;17</td><td>yes</td></tr>
+<tr><td>Adam + weight decay</td><td class="num">2.8e&minus;17</td><td>yes</td></tr>
+</table>
+
+<div class="box why"><b class="lbl">Why Adam is not bit-identical &mdash; and why that is fine</b>
+PyTorch computes the step as
+$\dfrac{\eta}{1-\beta_1^t}\cdot\dfrac{m}{\sqrt{v}/\sqrt{1-\beta_2^t}+\epsilon}$, while I compute
+$\eta\cdot\dfrac{m/(1-\beta_1^t)}{\sqrt{v/(1-\beta_2^t)}+\epsilon}$. These are the <b>same
+expression</b> algebraically, since $\sqrt{v/c} = \sqrt{v}/\sqrt{c}$ &mdash; but the operations
+happen in a different order, and floating-point arithmetic is not associative. A disagreement at
+the 17th digit confirms the formula is right. A disagreement at the 3rd would mean a real bug.</div>
+
+<h2>3.4 Part (b) &mdash; the narrow valley</h2>
+
+<p>The test function is</p>
+
+$$f(x,y) = \tfrac12\big(x^2 + 50y^2\big)
+\qquad\Longrightarrow\qquad
+\nabla f = (x,\; 50y)$$
+
+<p>It is 50 times steeper in $y$ than in $x$. The contours are long thin ellipses forming a
+narrow valley along the $x$-axis, with the minimum at the origin. This is called an
+<b>ill-conditioned</b> problem, and the number 50 is its <b>condition number</b>.</p>
+
+<div class="box key"><b class="lbl">Why one learning rate cannot serve both directions</b>
+Along $y$, gradient descent multiplies the error by $(1 - 50\eta)$ each step. That only converges
+while
+$$|1-50\eta| < 1 \quad\Longleftrightarrow\quad \eta < \tfrac{2}{50} = 0.04$$
+But along $x$ it multiplies by $(1-\eta)$, so with $\eta$ forced below 0.04 progress along the
+valley is painfully slow. <b>The steep direction dictates the step size; the shallow direction is
+the one we actually need to travel.</b></div>
+
+<figure>
+  <img src="figs/f_t2b.svg" alt="optimizer trajectories on a narrow valley">
+  <figcaption><b>Task 2(b).</b> All three start at $(-9,1)$ and take 60 steps. SGD and momentum
+  use $\eta=0.038$, just under the stability limit &mdash; the fastest plain SGD can safely go.
+  Adam uses $\eta=0.3$, because its normalised step is about $\eta$ per iteration regardless of
+  gradient size, so it must be sized to the <i>distance to travel</i>, not to the curvature.</figcaption>
+</figure>
+
+<table>
+<tr><th>Optimizer</th><th>Sign flips in $y$</th><th>Final $f$</th><th>Reading</th></tr>
+<tr><td>SGD</td><td class="num">60 of 60</td><td class="num">0.388</td>
+    <td>Bounces across the valley on <b>every single step</b></td></tr>
+<tr><td>SGD + momentum</td><td class="num">30</td><td class="num">0.058</td>
+    <td>Half the oscillation, and <b>6.7&times;</b> closer to the minimum</td></tr>
+<tr><td>Adam</td><td class="num">6</td><td class="num">0.109</td>
+    <td>Almost no zigzag; takes a near-diagonal route</td></tr>
+</table>
+
+<p><b>Reading the three behaviours:</b></p>
+<ul>
+<li><b>SGD zigzags.</b> With $\eta = 0.038$ the $y$-error is multiplied by
+$1-50(0.038) = -0.9$: the sign flips every step and the size only shrinks 10%. Meanwhile $x$
+shrinks by $(1-0.038)=0.962$ per step, so after 60 steps it has crawled from $-9$ to only
+$-0.88$. Nearly all the effort goes into the direction that does not matter.</li>
+<li><b>Momentum damps it.</b> The $y$ component alternates sign so consecutive contributions
+cancel in the buffer; the $x$ component is consistent so it accumulates towards the tenfold
+amplification. Same learning rate, five times further along the valley.</li>
+<li><b>Adam sidesteps the problem.</b> Dividing by $\sqrt{\hat v}$ normalises each coordinate by
+its own gradient history, so the huge $y$ gradients and small $x$ gradients produce steps of
+similar size. It effectively ignores the conditioning that cripples SGD.</li>
+</ul>
+
+<div class="box why"><b class="lbl">The honest nuance</b>
+The <b>best final value belongs to momentum, not Adam</b>. On a clean, noiseless, convex problem
+like this, well-tuned momentum is hard to beat. Adam's real advantage appears in part (c), where
+the gradients are noisy and badly scaled across layers.</div>
+
+<h2>3.5 Part (c) &mdash; how much does the learning rate matter?</h2>
+
+<p>The same grid $\eta \in \{0.001,\ 0.01,\ 0.1\}$ is used for <b>all three</b> optimizers. That
+is deliberate: if each were given its own favourable range, the plot would only show that all
+three can be made to work. With a shared grid you can read off <i>where</i> each one peaks and
+<i>how sharply</i> it falls away.</p>
+
+<figure>
+  <img src="figs/f_t2c.svg" alt="validation accuracy versus learning rate">
+  <figcaption><b>Task 2(c).</b> SmallCNN, 141,034 parameters, 15 epochs on the full 45k training
+  split. Adam peaks in the middle of the grid; both SGD variants are still climbing at the right
+  edge.</figcaption>
+</figure>
+
+<table>
+<tr><th>Optimizer</th><th>$\eta=0.001$</th><th>$\eta=0.01$</th><th>$\eta=0.1$</th>
+    <th>Spread</th></tr>
+<tr><td>SGD</td><td class="num">42.8%</td><td class="num">62.5%</td>
+    <td class="num"><b>71.6%</b></td><td class="num"><b>28.8 pts</b></td></tr>
+<tr><td>SGD + momentum</td><td class="num">64.2%</td><td class="num">75.3%</td>
+    <td class="num"><b>79.1%</b></td><td class="num">14.9 pts</td></tr>
+<tr><td>Adam</td><td class="num">76.8%</td><td class="num"><b>80.4%</b></td>
+    <td class="num">69.1%</td><td class="num">11.3 pts</td></tr>
+</table>
+
+<div class="box key"><b class="lbl">The headline is sensitivity, not the winner</b>
+Plain SGD swings <b>28.8 points</b> across the grid &mdash; nearly useless at $\eta=0.001$ (42.8%,
+barely better than the Task 1 MLP). Adam varies by only <b>3.6 points</b> between $\eta=0.001$ and
+$\eta=0.01$, both above 76%. <b>A careless learning rate costs almost nothing with Adam and nearly
+thirty points with plain SGD.</b> That is the practical reason Adam is the default when there is no
+time to tune.</div>
+
+<div class="box trap"><b class="lbl">But Adam is the only one that actually breaks</b>
+It collapses from 80.4% to 69.1% at $\eta=0.1$ &mdash; an 11-point drop &mdash; while both SGD
+variants are still improving there. Adam's step is about $\eta$ per parameter regardless of
+gradient size, so $\eta=0.1$ means updates as large as the weights themselves, and training
+destabilises. The flatness that makes Adam forgiving at small rates is a liability at large ones.</div>
+
+<div class="box why"><b class="lbl">An honest limitation of this grid</b>
+Both SGD curves are <b>still rising</b> at $\eta=0.1$, so their optima lie at or beyond the right
+edge &mdash; this grid does not bracket them. Plain SGD would probably keep improving to about
+$\eta \approx 0.3$. So the 71.6% is a <b>lower bound</b>, not SGD's ceiling. Three points per
+optimizer is enough to rank sensitivity but not enough to locate the best rate.</div>
+
+<div class="box key"><b class="lbl">Where the tenfold amplification shows up</b>
+It is <i>not</i> visible as a shift in peak position, because the grid truncates both SGD curves at
+the same point. It shows instead at matched quality: <b>momentum at $\eta=0.01$ scores 75.3%,
+beating plain SGD at $\eta=0.1$ (71.6%)</b> &mdash; better results with one tenth of the learning
+rate, exactly the $\frac{1}{1-\mu}=10$ factor predicted above. Momentum buys you roughly a decade
+of learning rate.</div>
+
+<div class="box say"><b class="lbl">The payoff worth quoting</b>
+This CNN reaches <b>80.4%</b> with <b>141,034</b> parameters. The Task 1 MLP managed <b>50.6%</b>
+with <b>1,707,274</b> &mdash; twelve times as many parameters for thirty points <i>less</i>
+accuracy. That single comparison is the whole case for convolution: weight sharing and locality,
+not scale.</div>

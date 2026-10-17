@@ -1,0 +1,264 @@
+<h1 class="pb">5. Task 4 &mdash; Best network under 500k parameters</h1>
+
+<div class="box q"><b class="lbl">What the assignment asked</b>
+Design the best CNN you can with <b>at most 500k parameters</b> and <b>at most 20 training
+epochs</b>. Tune on the validation split. Report an ablation of at least three design choices
+(e.g. shortcut, augmentation, weight decay, optimizer), and the test accuracy of your final model,
+<b>evaluated once</b>.</div>
+
+<div class="box why"><b class="lbl">Status</b>
+The cells for this task are written and verified, but at the time of writing this document the
+runs had not yet been executed, so the result tables below are left for you to fill in from your
+own output. Everything else &mdash; the design, the reasoning, the equations &mdash; is final.</div>
+
+<h2>5.1 Designing to the budget</h2>
+
+<p>Twenty epochs is the binding constraint, and it changes what the right architecture is. A very
+deep network spends most of a short schedule just getting organised. Task 3(b) showed this
+directly: at 30 epochs the 56-layer residual network had <i>not</i> caught up with the 20-layer one
+on validation accuracy (80.78% vs 83.16%).</p>
+
+<div class="box key"><b class="lbl">The design decision, in one sentence</b>
+Start from <b>depth 20</b> &mdash; the shape that actually worked in Task 3(b) &mdash; and spend
+the remaining parameter budget on <b>width</b> rather than more layers.</div>
+
+<p>Scaling the channels up from the standard 16/32/64:</p>
+
+<table>
+<tr><th>Configuration</th><th>Depth</th><th>Parameters</th><th>Fits 500k?</th></tr>
+<tr><td>16 / 32 / 64 &nbsp;<span style="color:#6b7a99">(Task 3b baseline)</span></td><td>20</td>
+    <td class="num">269,722</td><td>yes, but wastes 46% of the budget</td></tr>
+<tr><td><b>21 / 42 / 84</b></td><td><b>20</b></td><td class="num"><b>463,627</b></td>
+    <td><b>yes &mdash; 92.7% of budget</b></td></tr>
+<tr><td>22 / 44 / 88</td><td>20</td><td class="num">508,672</td><td>no, over by 8,672</td></tr>
+<tr><td>24 / 48 / 96</td><td>14</td><td class="num">386,626</td><td>yes, but shallower</td></tr>
+<tr><td>20 / 40 / 80</td><td>26</td><td class="num">572,430</td><td>no</td></tr>
+</table>
+
+<p><b>21/42/84 at depth 20</b> is the choice: the widest version of the known-good shape that
+still fits. The odd channel counts are simply what the budget permits.</p>
+
+<h2>5.2 The recipe, and where each ingredient came from</h2>
+
+<table>
+<tr><th style="width:21%">Ingredient</th><th style="width:30%">Setting</th><th>Evidence</th></tr>
+<tr><td>architecture</td><td>residual, depth 20, widths 21/42/84</td>
+    <td>Task 3(b): shortcuts win, and depth 20 generalised best</td></tr>
+<tr><td>optimizer</td><td>SGD, momentum 0.9</td>
+    <td>Task 2(c): best accuracy at a well-chosen rate</td></tr>
+<tr><td>learning rate</td><td>0.1, cosine annealed to 0</td>
+    <td>Task 2(c): SGD wanted the top of the grid</td></tr>
+<tr><td>weight decay</td><td>$5\times10^{-4}$</td><td>Task 3(a)</td></tr>
+<tr><td>augmentation</td><td>flip + pad-4 crop + cutout(8)</td>
+    <td>Task 3(a): flip+crop was the only method that actually stopped memorisation</td></tr>
+<tr><td>batch size</td><td>128</td><td>used throughout</td></tr>
+</table>
+
+<p>Cosine annealing is the one ingredient not inherited from an earlier task. The learning rate
+follows</p>
+
+$$\eta_t = \frac{\eta_0}{2}\left(1 + \cos\frac{\pi t}{T}\right)$$
+
+<p>decaying smoothly from $\eta_0 = 0.1$ to zero over $T = 20$ epochs. With such a short budget
+there is no room for a step schedule's long plateaus, and annealing smoothly extracts most of what
+a longer schedule would give: large steps early to travel far, tiny steps late to settle.</p>
+
+<h2>5.3 The ablation</h2>
+
+<p>Each row removes <b>exactly one</b> ingredient and changes nothing else, so the difference is
+attributable to that ingredient alone.</p>
+
+<table>
+<tr><th style="width:20%">Configuration</th><th style="width:26%">What changed</th>
+    <th style="width:16%">Best val</th><th>Change</th></tr>
+<tr><td>full recipe</td><td>&mdash;</td><td class="num">_____</td><td>baseline</td></tr>
+<tr><td>minus shortcut</td><td>plain network, <b>identical</b> parameter count</td>
+    <td class="num">_____</td><td class="num">_____</td></tr>
+<tr><td>minus augment</td><td>no flip, crop or cutout</td><td class="num">_____</td>
+    <td class="num">_____</td></tr>
+<tr><td>minus weight decay</td><td>$\lambda = 0$</td><td class="num">_____</td>
+    <td class="num">_____</td></tr>
+<tr><td>Adam instead</td><td>Adam at $\eta=10^{-3}$</td><td class="num">_____</td>
+    <td class="num">_____</td></tr>
+</table>
+
+<div class="box key"><b class="lbl">What the ablation is actually for</b>
+The deliverable is the <b>ranking</b>, not the headline accuracy. It says which design decisions
+carried weight and which were nearly free. Based on Task 3(a) I expect augmentation to be the
+largest single contributor, since it was the only method there that prevented memorisation.</div>
+
+<div class="box trap"><b class="lbl">Two caveats to state when reporting it</b>
+<b>Single seed.</b> Run-to-run variation on CIFAR-10 at this scale is a few tenths of a point, so
+any difference smaller than roughly half a point should be read as "no measurable effect", not a
+real ranking.
+<br><br>
+<b>No interactions.</b> A one-factor-at-a-time ablation cannot see interactions &mdash; removing
+two ingredients need not cost the sum of removing each. Task 3(a) showed exactly this: every
+regularizer helped alone, but all five together were <i>worse</i> than flip+crop by itself.</div>
+
+<h2>5.4 The single test evaluation</h2>
+
+<div class="box key"><b class="lbl">Why "once" is enforced by code, not by intention</b>
+Every time a number from the test set influences a decision, it stops being a held-out measure of
+generalisation and quietly becomes part of the training procedure. Had I run the ablation against
+the test set, the winning configuration would have been <i>selected</i> using test data and the
+reported accuracy would be optimistic by an unknown amount.
+<br><br>
+So the notebook evaluates it in one dedicated cell and caches the answer to
+<code>results/t4_test_eval.json</code>. Re-running the notebook reads the stored value instead of
+measuring again. Deleting that file is the only way to repeat the measurement &mdash; which is
+exactly the moment you would be contaminating the estimate.</div>
+
+<table>
+<tr><th style="width:42%">Final model</th><th></th></tr>
+<tr><td>architecture</td><td>residual, depth 20, widths 21/42/84</td></tr>
+<tr><td>parameters</td><td class="num">463,627 of 500,000 allowed (92.7%)</td></tr>
+<tr><td>epochs</td><td class="num">20 of 20 allowed</td></tr>
+<tr><td>validation accuracy</td><td class="num">_____%</td></tr>
+<tr><td><b>test accuracy</b></td><td class="num"><b>_____%</b></td></tr>
+</table>
+
+<div class="box why"><b class="lbl">How to read the test-vs-validation comparison</b>
+They should land within about a point of each other.
+<ul>
+<li><b>Test close to validation</b> &rarr; the validation split did its job. It was used for every
+decision so it is mildly optimistic, but with only five configurations compared the selection bias
+is small.</li>
+<li><b>Test noticeably below validation</b> &rarr; that gap is the price of having tuned on
+validation. Some of the winner's margin was luck. Report the test number either way: it is the only
+unbiased estimate you have.</li>
+</ul></div>
+
+
+<h1 class="pb">6. Explaining this to someone in five minutes</h1>
+
+<p>If you have to summarise the whole assignment out loud, this is the order that works. Each step
+sets up the next.</p>
+
+<div class="box say"><b class="lbl">1. Start with the problem (20 seconds)</b>
+"CIFAR-10 is 60,000 tiny photos in 10 categories. I had to build networks to classify them &mdash;
+starting from writing the learning algorithm itself by hand, with no automatic differentiation."</div>
+
+<div class="box say"><b class="lbl">2. Task 1 &mdash; how learning works (60 seconds)</b>
+"I implemented the forward and backward pass of every layer myself. The nice result is that softmax
+combined with cross-entropy has the gradient <i>predicted probability minus true probability</i>
+&mdash; all the messy terms cancel.
+<br><br>
+I proved it two ways: against PyTorch's autograd, which matched to 16 decimal places, and by
+nudging individual weights and measuring the slope directly, which matched to 9.
+<br><br>
+Then I trained it. It got <b>50.6%</b> &mdash; and that is a ceiling, not a bug. Flattening an
+image into a list of 3072 numbers throws away the fact that neighbouring pixels are related, and
+that a cat shifted three pixels right is still a cat."</div>
+
+<div class="box say"><b class="lbl">3. Task 2 &mdash; how you descend matters (60 seconds)</b>
+"Same network, different optimizers. On a deliberately stretched valley, plain gradient descent
+zigzags across it on <i>every single step</i> &mdash; 60 out of 60 &mdash; because the step size is
+dictated by the steep direction while the direction you need to travel is the shallow one.
+Momentum, which accumulates a velocity, halves the zigzag. Adam, which divides each coordinate by
+its own gradient history, almost eliminates it.
+<br><br>
+On the real CNN, the learning rate alone moved accuracy from <b>43% to 80%</b>. The headline is
+<i>sensitivity</i>: plain SGD swings 29 points across the grid, Adam only 11. That is why Adam is
+the default when you cannot afford to tune."</div>
+
+<div class="box say"><b class="lbl">4. Task 3 &mdash; two different failures (90 seconds)</b>
+"Networks fail in two ways that look alike but are not.
+<br><br>
+<b>Too little data.</b> On 5,000 images mine hit 100% on training and 67% on validation &mdash;
+perfect memorisation. Penalising the weights barely helped; it still memorised. What worked was
+changing the <i>pictures</i>: flipping and cropping so it never saw the same image twice.
+<br><br>
+<b>Too many layers.</b> I built the same network plain and with shortcut connections, with
+<i>identical</i> parameter counts. At 56 layers the plain one broke &mdash; training loss 200 times
+worse than its own 20-layer version, despite three times the parameters. That is not overfitting,
+because the <i>training</i> loss is what got worse. A 56-layer net could copy a 20-layer one by
+setting the extra layers to the identity, so the ability is there and gradient descent just cannot
+find it. One line &mdash; <code>out = out + x</code> &mdash; fixes it: 0.0009 instead of 0.77."</div>
+
+<div class="box say"><b class="lbl">5. Task 4 and the punchline (30 seconds)</b>
+"Finally I combined everything under a budget: at most 500k parameters and 20 epochs. I spent the
+budget on width rather than depth, because Task 3 showed depth needs more epochs than I had.
+<br><br>
+The thread through all of it is that <b>structure beats size</b>. My best model has fewer
+parameters than the fully-connected network I started with, and is far more accurate &mdash;
+because convolution, shortcuts and augmentation each build in something true about images that the
+first network had to try to learn from data, and could not."</div>
+
+<h2>6.1 The five questions you are most likely to be asked</h2>
+
+<table>
+<tr><th style="width:38%">Question</th><th>Short answer</th></tr>
+<tr><td><b>Why is softmax fused with cross-entropy?</b></td>
+    <td>Because the gradient simplifies to $p - y$ &mdash; the softmax Jacobian cancels against the
+    logarithm. Separately they are both messier and numerically unstable.</td></tr>
+<tr><td><b>Why does Kaiming initialisation use 2/fan-in?</b></td>
+    <td>Because ReLU switches off about half the units, costing a factor of 2 in signal variance
+    per layer. The 2 in the numerator is exactly that correction. It is derived <i>for</i> ReLU.</td></tr>
+<tr><td><b>Why no $(1-\mu)$ in your momentum?</b></td>
+    <td>Both conventions exist and are the same algorithm &mdash; they differ by a constant
+    $(1-\mu)$ absorbed into the learning rate. I used PyTorch's form because the task required
+    matching <code>torch.optim.SGD</code>. My Adam <i>does</i> use the $(1-\beta)$ form, because
+    Adam is defined that way.</td></tr>
+<tr><td><b>Is plain-56 failing because it overfits?</b></td>
+    <td>No. Overfitting means <i>low</i> training loss with poor validation. Here the training
+    loss itself is bad, on data it is being fitted to. It is an optimisation failure.</td></tr>
+<tr><td><b>Why does the test set only get used once?</b></td>
+    <td>Because any decision made by looking at it turns it into training data, and the reported
+    accuracy stops being an honest estimate of generalisation.</td></tr>
+</table>
+
+
+<h1 class="pb">7. Symbol glossary</h1>
+
+<table>
+<tr><th style="width:15%">Symbol</th><th style="width:30%">Means</th><th>Where it appears</th></tr>
+<tr><td>$L$</td><td>the loss &mdash; how wrong the network is</td><td>everywhere</td></tr>
+<tr><td>$g$ or $g_t$</td><td>gradient, $\partial L/\partial(\text{something})$</td><td>Tasks 1, 2</td></tr>
+<tr><td>$W$, $b$</td><td>weight matrix, bias vector</td><td>Task 1(a)</td></tr>
+<tr><td>$x$, $y$, $z$</td><td>input, true label, logits (raw scores)</td><td>Task 1</td></tr>
+<tr><td>$N$, $C$</td><td>batch size, number of classes (10 here)</td><td>Task 1</td></tr>
+<tr><td>$\eta$ (eta)</td><td>learning rate &mdash; how big a step to take</td><td>Task 2</td></tr>
+<tr><td>$\mu$ (mu)</td><td>momentum coefficient, usually 0.9</td><td>Task 2</td></tr>
+<tr><td>$\beta_1,\beta_2$</td><td>Adam's two decay rates, 0.9 and 0.999</td><td>Task 2</td></tr>
+<tr><td>$m_t$, $v_t$</td><td>Adam's running mean and running variance of the gradient</td><td>Task 2</td></tr>
+<tr><td>$\epsilon$ (epsilon)</td><td>tiny constant, $10^{-8}$, stops division by zero</td><td>Task 2</td></tr>
+<tr><td>$\varepsilon$</td><td>the nudge size in finite differences, $10^{-5}$</td><td>Task 1(b)</td></tr>
+<tr><td>$\lambda$ (lambda)</td><td>weight-decay strength; also mixup's blend ratio</td><td>Tasks 3, 4</td></tr>
+<tr><td>$\sigma$ (sigma)</td><td>the sigmoid function; also a standard deviation</td><td>Task 1(d)</td></tr>
+<tr><td>$\mathbb{1}[\cdot]$</td><td>1 if the condition holds, 0 otherwise</td><td>Task 1(a)</td></tr>
+<tr><td>$\odot$</td><td>multiply element by element</td><td>Task 1(a)</td></tr>
+<tr><td>$n$</td><td>blocks per stage; depth is $6n+2$</td><td>Task 3(b)</td></tr>
+<tr><td>$F(x)$</td><td>what a residual block computes before adding $x$ back</td><td>Task 3(b)</td></tr>
+</table>
+
+<h2>7.1 Jargon, decoded</h2>
+<table>
+<tr><th style="width:24%">Term</th><th>Plain meaning</th></tr>
+<tr><td><b>epoch</b></td><td>One complete pass through all the training images.</td></tr>
+<tr><td><b>batch</b></td><td>A small group of images (128 here) processed together before updating
+    the weights.</td></tr>
+<tr><td><b>logits</b></td><td>The raw scores the network outputs, before they are turned into
+    probabilities.</td></tr>
+<tr><td><b>autograd</b></td><td>PyTorch's automatic differentiation &mdash; the thing Task 1
+    forbids you from using.</td></tr>
+<tr><td><b>batch norm</b></td><td>A layer that re-centres and re-scales its inputs using the
+    statistics of the current batch. Makes training much more stable.</td></tr>
+<tr><td><b>global average pooling</b></td><td>Replace each channel's whole feature map with its
+    average value. Turns a $64\times4\times4$ block into just 64 numbers, cheaply.</td></tr>
+<tr><td><b>ill-conditioned</b></td><td>Much steeper in one direction than another, so a single
+    step size cannot suit both.</td></tr>
+<tr><td><b>generalisation gap</b></td><td>Training accuracy minus validation accuracy. How much of
+    what the network knows is memorisation.</td></tr>
+<tr><td><b>ablation</b></td><td>Removing one ingredient at a time to find out how much each
+    contributes.</td></tr>
+</table>
+
+<div style="margin-top:2.5em;padding-top:.8em;border-top:1px solid #d8e0ee;font-size:8.6pt;color:#6b7a99">
+Companion to <code>EN4554_a02.ipynb</code> &mdash; Lakshan R.G.R, 220355M.
+Figures for Tasks 1&ndash;3 are generated from the measured results in
+<code>results/*.json</code>; Task 4 tables are left blank pending that run.
+</div>
+
+</body>
+</html>

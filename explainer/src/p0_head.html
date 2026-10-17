@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EN4554 Assignment 2 — Explained</title>
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['$','$']], displayMath: [['$$','$$']] },
+  svg: { fontCache: 'global' },
+  options: { renderActions: { addMenu: [] } }
+};
+</script>
+<script src="src/vendor/tex-svg.js" id="MathJax-script"></script>
+<style>
+  @page { size: A4; margin: 15mm 14mm 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.3pt; line-height: 1.52; color: #1f2430;
+    margin: 0 auto; max-width: 700px; padding: 0;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.5em 0 .5em; page-break-after: avoid; }
+  h1 { font-size: 19pt; color: #15306b; border-bottom: 2.5px solid #2563eb; padding-bottom: .22em; }
+  h2 { font-size: 14.2pt; color: #1b3f91; margin-top: 1.7em; }
+  h3 { font-size: 11.6pt; color: #24304a; }
+  h4 { font-size: 10.4pt; color: #3b4663; margin-bottom: .3em; }
+  p  { margin: .55em 0; }
+  ul, ol { margin: .5em 0 .5em 1.1em; padding-left: .5em; }
+  li { margin: .26em 0; }
+  code, .mono {
+    font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 9.1pt; background: #eef1f7; padding: .08em .3em; border-radius: 3px;
+    color: #11306e;
+  }
+  pre {
+    background: #f7f9fc; border: 1px solid #d8e0ee; border-left: 3px solid #2563eb;
+    border-radius: 4px; padding: .6em .8em; overflow-x: auto;
+    font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 8.6pt; line-height: 1.42; page-break-inside: avoid; margin: .7em 0;
+  }
+  pre .c { color: #6b7a99; font-style: italic; }
+  pre .k { color: #a4249a; }
+  pre .s { color: #1a7f37; }
+  table { border-collapse: collapse; width: 100%; margin: .75em 0; font-size: 9.1pt;
+          page-break-inside: avoid; }
+  th { background: #eaf0fb; color: #15306b; text-align: left; font-weight: 600;
+       padding: .4em .55em; border: 1px solid #c6d4ea; }
+  td { padding: .36em .55em; border: 1px solid #dde4f0; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafbfe; }
+  figure { margin: 1em 0; page-break-inside: avoid; text-align: center; }
+  figure img, figure svg { max-width: 100%; height: auto; }
+  figcaption { font-size: 8.5pt; color: #5a6680; margin-top: .4em; text-align: left;
+               border-left: 2px solid #c6d4ea; padding-left: .6em; }
+  .box { border-radius: 5px; padding: .62em .85em; margin: .8em 0; page-break-inside: avoid;
+         border-left-width: 4px; border-left-style: solid; font-size: 9.7pt; }
+  .q    { background: #f3f0ff; border-left-color: #7c3aed; }
+  .key  { background: #eefcf3; border-left-color: #059669; }
+  .why  { background: #fff8e8; border-left-color: #d97706; }
+  .trap { background: #fdeeee; border-left-color: #dc2626; }
+  .say  { background: #eef4ff; border-left-color: #2563eb; }
+  .box b.lbl { display: block; font-size: 8.4pt; letter-spacing: .09em; text-transform: uppercase;
+               margin-bottom: .22em; opacity: .8; }
+  .q b.lbl{color:#6d28d9}.key b.lbl{color:#047857}.why b.lbl{color:#b45309}
+  .trap b.lbl{color:#b91c1c}.say b.lbl{color:#1d4ed8}
+  .cover { text-align: center; padding-top: 42mm; page-break-after: always; }
+  .cover h1 { font-size: 26pt; border: none; color: #15306b; margin-bottom: .1em; }
+  .cover .sub { font-size: 13pt; color: #41506e; margin-bottom: 2.4em; }
+  .cover .meta { font-size: 10.5pt; color: #41506e; line-height: 1.9; }
+  .cover .rule { width: 90px; height: 3px; background: #2563eb; margin: 1.6em auto; }
+  .toc { page-break-after: always; }
+  .toc ol { font-size: 10pt; }
+  .toc ol ol { margin-top: .2em; color: #4a5672; font-size: 9.3pt; }
+  .pb { page-break-before: always; }
+  .num { font-variant-numeric: tabular-nums; }
+  .big { font-size: 11pt; font-weight: 600; color: #15306b; }
+  .cellref { display:inline-block; background:#15306b; color:#fff; font-size:7.8pt;
+             padding:.1em .45em; border-radius:3px; font-family:Consolas,monospace;
+             letter-spacing:.02em; }
+  .flow { font-family:"Cascadia Mono",Consolas,monospace; font-size:8.6pt; line-height:1.65;
+          background:#f7f9fc; border:1px solid #d8e0ee; border-radius:4px; padding:.7em .9em;
+          white-space:pre; page-break-inside:avoid; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>EN4554 &mdash; Assignment 2</h1>
+  <div class="sub">Convolutional Neural Networks<br>A plain-English companion to my notebook</div>
+  <div class="rule"></div>
+  <div class="meta">
+    <b>Lakshan R.G.R</b><br>
+    Index 220355M<br>
+    <span style="font-size:9.5pt;color:#6b7a99">
+      What each question asked &middot; what my code does<br>
+      the mathematics behind it &middot; what the results mean
+    </span>
+  </div>
+</div>
+
+<div class="toc">
+<h1>What is in here</h1>
+<p>This document is a companion to <code>EN4554_a02.ipynb</code>. For every part of the
+assignment it answers four questions, in the same order each time:</p>
+<table>
+<tr><th style="width:21%">Section</th><th>What it tells you</th></tr>
+<tr><td><b>The question</b></td><td>What the assignment actually asked for, in plain words</td></tr>
+<tr><td><b>The idea</b></td><td>The concept behind it, with no jargon on first use</td></tr>
+<tr><td><b>The mathematics</b></td><td>Every equation the code implements, and what each symbol means</td></tr>
+<tr><td><b>The code</b></td><td>Which notebook cell does it, and what that cell is doing</td></tr>
+<tr><td><b>The result</b></td><td>The numbers I measured and what they mean</td></tr>
+</table>
+
+<ol>
+  <li><b>The big picture</b> &mdash; how the four tasks fit together
+    <ol><li>The one-sentence story</li><li>Map of the notebook</li></ol></li>
+  <li><b>Task 1 &mdash; Backpropagation by hand</b>
+    <ol><li>Three derivatives: Linear, ReLU, softmax cross-entropy</li>
+        <li>Proving the gradients are right</li>
+        <li>Training the MLP &mdash; and why it stops at 50%</li>
+        <li>Why deep sigmoid networks fail</li></ol></li>
+  <li><b>Task 2 &mdash; Optimizers</b>
+    <ol><li>SGD, momentum and Adam as formulas</li>
+        <li>Why the narrow-valley picture matters</li>
+        <li>Learning-rate sensitivity</li></ol></li>
+  <li><b>Task 3 &mdash; Regularization and shortcuts</b>
+    <ol><li>Six ways to stop a network memorising</li>
+        <li>The degradation problem and the residual fix</li></ol></li>
+  <li><b>Task 4 &mdash; The best network under 500k parameters</b></li>
+  <li><b>Explaining this to someone in five minutes</b></li>
+  <li><b>Symbol glossary</b></li>
+</ol>
+</div>

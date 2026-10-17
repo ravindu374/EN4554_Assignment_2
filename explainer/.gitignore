@@ -1,0 +1,6 @@
+# local MathJax bundle (2 MB, copied from another project)
+src/vendor/
+# intermediate render
+guide.html
+shot_*.png
+slice_*.png

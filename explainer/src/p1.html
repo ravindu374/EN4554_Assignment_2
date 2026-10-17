@@ -1,0 +1,315 @@
+<h1>1. The big picture</h1>
+
+<h2>1.1 The one-sentence story</h2>
+
+<div class="box key"><b class="lbl">The thread running through all four tasks</b>
+<b>Structure beats size.</b> A network that is <i>built</i> to understand images needs far
+fewer numbers than one that must learn everything from scratch &mdash; and the assignment
+walks through that idea one piece at a time.</div>
+
+<p>Each task adds one piece:</p>
+
+<table>
+<tr><th style="width:12%">Task</th><th style="width:34%">The question it answers</th><th>The answer it gives</th></tr>
+<tr><td><b>1</b></td><td>How does a network learn at all?</td>
+    <td>By backpropagation. I wrote it by hand, with no autograd, and proved it correct.
+        A plain fully-connected network tops out near <b>50%</b> on CIFAR-10.</td></tr>
+<tr><td><b>2</b></td><td>Does it matter <i>how</i> we step downhill?</td>
+    <td>Enormously. The same network scores anywhere from <b>43%</b> to <b>80%</b>
+        depending only on the optimizer and learning rate.</td></tr>
+<tr><td><b>3</b></td><td>Why do networks fail, and how do we fix them?</td>
+    <td>Two different failures. Too little data &rarr; it memorises (fix: regularization).
+        Too many layers &rarr; it cannot be trained (fix: shortcut connections).</td></tr>
+<tr><td><b>4</b></td><td>Put it together under a budget.</td>
+    <td>Best network I can build with at most 500,000 numbers and 20 passes over the data.</td></tr>
+</table>
+
+<h2>1.2 The data, once, for the whole assignment</h2>
+
+<p><b>CIFAR-10</b> is 60,000 colour photographs, each a tiny 32&times;32 pixels, belonging to
+10 classes (aeroplane, car, bird, cat, deer, dog, frog, horse, ship, truck). Each image is
+$32\times32\times3 = 3072$ numbers &mdash; three colour channels per pixel.</p>
+
+<div class="flow">50,000 training images              10,000 test images
+        |                                  |
+   +----+-----+                            |
+   |          |                            |
+ 45,000      5,000                      10,000
+ TRAIN    VALIDATION                     TEST
+   |          |                            |
+ learn    choose settings         touched ONCE, at the very end
+ weights  (which optimizer,       in Task 4 - never before
+          which learning rate)</div>
+
+<div class="box why"><b class="lbl">Why three splits and not two</b>
+If I pick my settings by looking at a set of images, then those images have secretly helped
+train the model &mdash; my score on them is flattering, not honest. So the <b>validation</b> set
+takes all the decisions, and the <b>test</b> set stays sealed until there is nothing left to
+decide. That is why the notebook only reads the test set in one cell, right at the end, and
+caches the answer so it cannot accidentally be measured twice.</div>
+
+<p>One more setup detail that matters. Every image is <b>normalised</b>: for each colour
+channel I subtract the mean and divide by the standard deviation,</p>
+
+$$x_{\text{normalised}} = \frac{x - \mu_{\text{channel}}}{\sigma_{\text{channel}}}$$
+
+<p>with $\mu$ and $\sigma$ computed from the <b>45,000 training images only</b>. Using all
+50,000 would leak information about the validation images into the model. The measured values
+were $\mu = (0.4912,\ 0.4820,\ 0.4464)$ and $\sigma = (0.2472,\ 0.2436,\ 0.2617)$.</p>
+
+<div class="box say"><b class="lbl">If someone asks "why normalise?"</b>
+Raw pixels run 0&ndash;255. Weights get updated by a step proportional to the input size, so
+huge inputs mean huge, unstable steps. Centring the data near zero with a spread of about 1
+makes every input comparable and lets one learning rate work for all of them.</div>
+
+
+<h1 class="pb">2. Task 1 &mdash; Backpropagation by hand</h1>
+
+<div class="box q"><b class="lbl">What the assignment asked</b>
+<b>(a)</b> Implement <code>Linear</code>, <code>ReLU</code> and softmax cross-entropy with
+explicit forward/backward &mdash; <i>no autograd</i> &mdash; and assemble an MLP.<br>
+<b>(b)</b> Verify the gradients against autograd and against centred finite differences;
+report the relative errors.<br>
+<b>(c)</b> Train it with SGD on flattened CIFAR-10; plot the loss and report validation accuracy.<br>
+<b>(d)</b> For a 10-layer MLP, plot the per-layer gradient norm at initialisation with sigmoid
+and with ReLU. Explain.</div>
+
+<h2>2.1 The idea: learning is just blame assignment</h2>
+
+<p>A network makes a guess, and the guess is wrong by some amount &mdash; the <b>loss</b>.
+Every weight in the network shares some of the blame. <b>Backpropagation</b> is the procedure
+that works out exactly how much blame each weight deserves, and it does so by walking
+<i>backwards</i> through the network applying the chain rule.</p>
+
+<div class="flow">FORWARD   image --> Linear --> ReLU --> Linear --> ReLU --> Linear --> loss
+                                                                        |
+BACKWARD   dL/dW1 &lt;-- dL/dx &lt;-- dL/dx &lt;-- dL/dx &lt;-- dL/dx &lt;-- dL/dz &lt;---+
+           "how much is each weight to blame?"</div>
+
+<p>Each layer only has to know two things: how to compute its output from its input
+(<b>forward</b>), and how to turn "blame on my output" into "blame on my input and on my own
+weights" (<b>backward</b>). Chain those together and the whole network trains.</p>
+
+<h2>2.2 The mathematics &mdash; three derivatives</h2>
+
+<p>Throughout, $g$ means the gradient arriving from the layer above, i.e.
+$g = \dfrac{\partial L}{\partial(\text{this layer's output})}$.</p>
+
+<h3>(i) The Linear layer</h3>
+<p>Forward, for a batch of $N$ images: $\;y = xW + b\;$ with
+$x \in \mathbb{R}^{N\times d_{in}}$, $W \in \mathbb{R}^{d_{in}\times d_{out}}$,
+$b \in \mathbb{R}^{d_{out}}$.</p>
+
+$$\frac{\partial L}{\partial x} = g\,W^{\top}
+\qquad
+\frac{\partial L}{\partial W} = x^{\top} g
+\qquad
+\frac{\partial L}{\partial b} = \sum_{n=1}^{N} g_n$$
+
+<div class="box key"><b class="lbl">How to remember it</b>
+To differentiate a matrix product, <b>multiply by the other factor, transposed</b>. And the
+shapes only fit together one way &mdash; if your dimensions match, you almost certainly have the
+right formula. The bias was added to every row of the batch, so its gradient is the
+<b>sum down the rows</b>.</div>
+
+<h3>(ii) ReLU</h3>
+<p>Forward: $y = \max(x, 0)$.</p>
+
+$$\frac{\partial L}{\partial x} = g \odot \mathbb{1}[x > 0]$$
+
+<p>($\odot$ means multiply element by element; $\mathbb{1}[\cdot]$ is 1 where the condition
+holds and 0 elsewhere.)</p>
+
+<div class="box say"><b class="lbl">Say it in one line</b>
+ReLU is a gate. Where it let the signal <i>through</i> going forwards, it lets the blame
+through coming backwards. Where it <i>blocked</i> the signal, it blocks the blame.</div>
+
+<h3>(iii) Softmax + cross-entropy, fused into one block</h3>
+<p><b>Softmax</b> turns raw scores (called <b>logits</b>) into probabilities that add to 1.
+<b>Cross-entropy</b> then measures how surprised we are by the right answer. For logits
+$z \in \mathbb{R}^{N\times C}$ and true labels $y$:</p>
+
+$$L = \frac{1}{N}\sum_{n=1}^{N}\left(\log\sum_{c=1}^{C} e^{z_{nc}} \;-\; z_{n y_n}\right)$$
+
+<p>And here is the result worth remembering, because it is beautiful:</p>
+
+$$\boxed{\;\frac{\partial L}{\partial z} = \frac{1}{N}\Big(\operatorname{softmax}(z) - \text{onehot}(y)\Big)\;}$$
+
+<div class="box key"><b class="lbl">In words: predicted probability minus true probability</b>
+If the model says 0.7 for the correct class, the gradient on that logit is $-0.3$ &mdash; push it
+up. If it says 0.6 for a wrong class, the gradient is $+0.6$ &mdash; push it down. Every messy
+term of the softmax derivative cancels against the logarithm in cross-entropy. <b>This is why
+the two are always written as one block</b>, and it is the single most likely thing to be asked
+about in an exam.</div>
+
+<div class="box trap"><b class="lbl">The trap: overflow</b>
+$e^{z}$ becomes <code>inf</code> for $z$ above about 88 in single precision, and the loss turns
+into <code>nan</code>. The fix is to subtract the largest logit in each row first:
+$z \leftarrow z - \max_c z_c$. The softmax is unchanged (the factor cancels top and bottom) but
+now every exponent is $\le 0$. My code does this on the first line of the forward pass.</div>
+
+<h2>2.3 The code &mdash; what each cell does</h2>
+
+<table>
+<tr><th style="width:15%">Cell</th><th style="width:28%">What it defines</th><th>What it is doing</th></tr>
+<tr><td><span class="cellref">code 4</span></td><td><code>Linear</code>, <code>ReLU</code>,
+    <code>Sigmoid</code>, <code>SoftmaxCrossEntropy</code></td>
+    <td>The four building blocks. Each stores whatever its backward pass will need during
+    <code>forward</code> &mdash; <code>Linear</code> keeps <code>self.x</code>, <code>ReLU</code>
+    keeps a boolean mask, <code>Sigmoid</code> keeps its <i>output</i> (because
+    $\sigma' = \sigma(1-\sigma)$).</td></tr>
+<tr><td><span class="cellref">code 5</span></td><td><code>MLP</code>, <code>SGDManual</code></td>
+    <td><code>MLP.backward</code> is the whole trick in three lines: walk the layer list
+    <b>in reverse</b>, handing each layer's output gradient to the layer below.</td></tr>
+<tr><td><span class="cellref">code 6</span></td><td><code>check_against_autograd</code></td>
+    <td>Builds the same network with <code>nn.Linear</code>, copies my weights in, compares.</td></tr>
+<tr><td><span class="cellref">code 7</span></td><td><code>check_finite_differences</code></td>
+    <td>Nudges single weights up and down and measures the slope directly.</td></tr>
+<tr><td><span class="cellref">code 8&ndash;9</span></td><td>training + plot</td>
+    <td>Trains 3072&rarr;512&rarr;256&rarr;10 with my own SGD.</td></tr>
+<tr><td><span class="cellref">code 10&ndash;11</span></td><td><code>layer_grad_norms</code> + plot</td>
+    <td>One forward/backward pass through a 10-layer net, recording gradient size per layer.</td></tr>
+</table>
+
+<p>The core of it, in about ten lines:</p>
+
+<pre><span class="k">class</span> Linear:
+    <span class="k">def</span> forward(self, x):
+        self.x = x                  <span class="c"># remember: needed for dL/dW</span>
+        <span class="k">return</span> x @ self.W + self.b
+
+    <span class="k">def</span> backward(self, g):
+        self.dW = self.x.T @ g      <span class="c"># (in,N)@(N,out) -> (in,out)</span>
+        self.db = g.sum(dim=0)      <span class="c"># bias was added to every row</span>
+        <span class="k">return</span> g @ self.W.T       <span class="c"># pass blame to the layer below</span>
+
+<span class="k">class</span> MLP:
+    <span class="k">def</span> backward(self, g):
+        <span class="k">for</span> layer <span class="k">in</span> <span class="k">reversed</span>(self.layers):   <span class="c"># &lt;-- the entire idea</span>
+            g = layer.backward(g)</pre>
+
+<h2>2.4 Part (b) &mdash; proving the gradients are right</h2>
+
+<p>Two independent checks, which would fail for different reasons, so passing both is strong
+evidence.</p>
+
+<p><b>Check 1 &mdash; against autograd.</b> Rebuild the identical network with PyTorch's own
+<code>nn.Linear</code> layers, copy my weights across, and compare.</p>
+
+<div class="box trap"><b class="lbl">One detail that catches people out</b>
+PyTorch stores a linear layer's weight as <code>(out_features, in_features)</code>. Mine is
+<code>(in, out)</code> &mdash; the other way round. So both the copy and the comparison need a
+<b>transpose</b>. Get this wrong and you will think your gradients are broken when they are fine.</div>
+
+<p><b>Check 2 &mdash; centred finite differences.</b> This trusts nothing at all, not even
+PyTorch. Nudge one weight by a tiny $\varepsilon$ in each direction and measure the slope:</p>
+
+$$\frac{\partial L}{\partial \theta} \;\approx\; \frac{L(\theta+\varepsilon) - L(\theta-\varepsilon)}{2\varepsilon}$$
+
+<p>I use the <i>centred</i> version rather than the one-sided one because its error shrinks like
+$\mathcal{O}(\varepsilon^2)$ instead of $\mathcal{O}(\varepsilon)$. The number reported is the
+<b>relative error</b>:</p>
+
+$$\text{rel err} = \frac{\big|\text{analytic} - \text{numeric}\big|}
+                       {\big|\text{analytic}\big| + \big|\text{numeric}\big| + 10^{-12}}$$
+
+<h3>What I measured</h3>
+<table>
+<tr><th>Check</th><th>Result</th><th>What it means</th></tr>
+<tr><td>vs autograd</td><td class="num">max difference $3.3\times10^{-16}$</td>
+    <td>Agreement to one unit in the last digit of a 64-bit number. Identical.</td></tr>
+<tr><td>finite differences</td><td class="num">worst $3.7\times10^{-9}$, median $\sim10^{-10}$</td>
+    <td>At the noise floor of 64-bit arithmetic. Correct.</td></tr>
+</table>
+
+<div class="box trap"><b class="lbl">Two things that make a correct gradient look wrong</b>
+<b>1. Single precision.</b> Run the same check in <code>float32</code> and the relative error
+sits around $10^{-3}$, which looks like a bug. It is not &mdash; subtracting two nearly equal
+numbers destroys most of the digits. That is why the check runs in <code>float64</code>.<br>
+<b>2. ReLU's kink.</b> ReLU is not differentiable at exactly 0. If a value sits within
+$\varepsilon$ of zero, the two nudges land on opposite sides of the kink and that one weight
+reports a large error even though the code is right.</div>
+
+<h2>2.5 Part (c) &mdash; training it, and the 50% ceiling</h2>
+
+<figure>
+  <img src="figs/f_t1c.svg" alt="training loss and accuracy curves">
+  <figcaption><b>Task 1(c).</b> Left: the loss starts near $\ln 10 = 2.303$ &mdash; exactly what a
+  network that knows nothing must output, since it can only assign $1/10$ to every class &mdash; and
+  falls to 0.157. Right: training accuracy climbs to 94.8% while validation stalls near 50%.
+  The arrow marks the 46-point gap.</figcaption>
+</figure>
+
+<table>
+<tr><th>Quantity</th><th>Value</th></tr>
+<tr><td>Network</td><td>3072 &rarr; 512 &rarr; 256 &rarr; 10</td></tr>
+<tr><td>Parameters</td><td class="num">1,707,274</td></tr>
+<tr><td>Best validation accuracy</td><td class="num"><b>50.6%</b></td></tr>
+<tr><td>Final training accuracy</td><td class="num">94.8%</td></tr>
+<tr><td>Gap</td><td class="num">46 percentage points</td></tr>
+</table>
+
+<div class="box key"><b class="lbl">The important point is the ceiling, not the gap</b>
+A fully-connected network cannot get much past 50&ndash;55% on CIFAR-10 <b>no matter how long you
+train it or how wide you make it</b>. This is a limit of the architecture, not a failure of the
+training. Three reasons:
+<ul>
+<li><b>Flattening destroys locality.</b> After <code>reshape</code>, the pixel at (5,5) and the
+pixel at (5,6) are just "input 165" and "input 166". The network is never told they are
+neighbours and must learn that separately for every pair.</li>
+<li><b>No translation invariance.</b> A cat in the corner and the same cat shifted three pixels
+right are completely different input vectors. The network has to learn each position from scratch.</li>
+<li><b>It is wasteful.</b> The first layer alone is $3072\times512 = 1{,}572{,}864$ weights, and
+it still only ever sees one fixed arrangement of pixels.</li>
+</ul>
+This is exactly the gap a convolution closes &mdash; and the small CNN in Task 2 reaches
+<b>80.4%</b> with <b>twelve times fewer parameters</b>.</div>
+
+<h2>2.6 Part (d) &mdash; why deep sigmoid networks will not train</h2>
+
+<figure>
+  <img src="figs/f_t1d.svg" alt="per-layer gradient norms, sigmoid vs ReLU">
+  <figcaption><b>Task 1(d).</b> One forward and backward pass through a 10-layer network at
+  initialisation, no training. The vertical axis is logarithmic. Sigmoid's gradient shrinks by a
+  factor of about <b>94,000</b> on its way back to layer 1; ReLU's stays flat.</figcaption>
+</figure>
+
+<p><b>Why sigmoid collapses.</b> The derivative of the sigmoid function is</p>
+
+$$\sigma'(x) = \sigma(x)\big(1 - \sigma(x)\big) \;\le\; \tfrac14$$
+
+<p>with the maximum $\tfrac14$ reached only at $x=0$. Backpropagation multiplies by one of these
+factors <i>per layer</i>. After 9 hidden layers the signal reaching the first layer is scaled by
+at most</p>
+
+$$\left(\tfrac14\right)^{9} \approx 4\times10^{-6}$$
+
+<p>and in practice far less, because most units sit away from $x=0$ where $\sigma'$ is much
+smaller than $\tfrac14$. The early layers receive essentially no instruction and stay near their
+random starting values. This is the <b>vanishing gradient problem</b>.</p>
+
+<div class="box key"><b class="lbl">Why ReLU plus Kaiming initialisation fixes it</b>
+Two effects cancel exactly:
+<ul>
+<li>ReLU's derivative is <b>0 or 1</b> &mdash; it never shrinks what passes through. But about half
+the units are off at initialisation, which costs roughly a factor of 2 in signal variance per layer.</li>
+<li><b>Kaiming initialisation puts that factor back on purpose.</b> It sets
+$\operatorname{Var}[W] = \dfrac{2}{\text{fan-in}}$ rather than $\dfrac{1}{\text{fan-in}}$.
+<b>The 2 in that numerator <i>is</i> the ReLU correction.</b></li>
+</ul>
+So the activation function and the initialiser are not independent choices &mdash; Kaiming was
+derived <i>for</i> ReLU. That is why the figure pairs sigmoid with Xavier
+($\operatorname{Var}[W]=1/\text{fan-in}$) and ReLU with Kaiming: it is the honest comparison.</div>
+
+<div class="box why"><b class="lbl">A detail worth being able to explain</b>
+In the ReLU curve, layer 1 has the <i>largest</i> norm, which looks like it contradicts "flat".
+It does not. Layer 1's weight matrix is $3072\times128$ while every other hidden layer is
+$128\times128$ &mdash; 24 times more entries contributing to the norm. It is a size effect, not a
+gradient effect.</div>
+
+<div class="box say"><b class="lbl">The 20-second version</b>
+"Going backwards, each sigmoid layer multiplies the learning signal by at most a quarter. Ten
+layers of that and the first layer gets nothing &mdash; so it never learns. ReLU multiplies by
+0 or 1 instead, and Kaiming initialisation compensates for the half of the neurons that are
+switched off, so the signal survives all the way back. That is why deep networks only started
+working around 2010."</div>

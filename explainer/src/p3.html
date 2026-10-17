@@ -1,0 +1,279 @@
+<h1 class="pb">4. Task 3 &mdash; Regularization and shortcuts</h1>
+
+<div class="box q"><b class="lbl">What the assignment asked</b>
+<b>(a)</b> Train a small CNN with batch norm on <b>5k training images</b>. Compare: baseline,
+weight decay, dropout, flip+crop, cutout, mixup, and all combined (implement cutout and mixup
+yourself). Tabulate train accuracy, validation accuracy, and their gap; plot the curves.<br>
+<b>(b)</b> Build CIFAR-style plain and residual networks of depth $6n+2$ for depths 8, 20 and 56
+(three stages, channels 16/32/64, global average pooling, batch norm, Kaiming initialisation).
+The only difference between the two families is the shortcut. Plot the training loss versus epoch
+and explain.</div>
+
+<div class="box key"><b class="lbl">The crucial framing: these are two different failures</b>
+Part (a) is about <b>too little data</b> &mdash; the network memorises the training set and
+learns nothing general. Part (b) is about <b>too many layers</b> &mdash; the network cannot be
+trained at all, even on data it is actively being fitted to. They look similar from a distance
+("the deep model is worse") but they have completely different causes and completely different
+cures. Being able to tell them apart is the point of this task.</div>
+
+<h2>4.1 Part (a) &mdash; six ways to stop a network memorising</h2>
+
+<p>The training set is deliberately cut to <b>5,000 images</b>, one ninth of the full split.
+Regularization only matters when data is scarce: with all 45,000 images a 141k-parameter CNN
+barely overfits, and the effect would be too small to measure.</p>
+
+<h3>What each method does</h3>
+
+<table>
+<tr><th style="width:17%">Method</th><th style="width:30%">Mathematics</th><th>In plain words</th></tr>
+<tr><td><b>weight decay</b></td><td>$L' = L + \lambda\lVert w\rVert^2$,&nbsp; $\lambda = 5\times10^{-4}$<br>
+    i.e. $g \leftarrow g + \lambda w$</td>
+    <td>Adds a penalty for being large, pulling every weight gently towards zero. Simpler
+    functions, less room to memorise.</td></tr>
+<tr><td><b>dropout</b></td><td>$p = 0.3$</td>
+    <td>Randomly switches off 30% of the features during training. The network cannot rely on any
+    one feature always being present.</td></tr>
+<tr><td><b>flip + crop</b></td><td>&mdash;</td>
+    <td>Randomly mirror the image left-right, and take a random 32&times;32 window from a
+    4-pixel-padded version. The network never sees the same framing twice.</td></tr>
+<tr><td><b>cutout</b></td><td>zero an $8\times8$ square</td>
+    <td>Blanks out a random patch. If the net leans on one distinctive feature &mdash; a cat's ear
+    &mdash; it fails whenever that feature is hidden, so it is forced to use the whole picture.</td></tr>
+<tr><td><b>mixup</b></td><td>see below</td>
+    <td>Trains on <i>blends</i> of two images with blended labels. Forces sensible behaviour
+    in the gaps between training examples.</td></tr>
+</table>
+
+<h3>The two I implemented from scratch</h3>
+
+<p><b>Cutout</b> picks a random centre and zeroes an $8\times8$ square. The zeroing happens
+<i>after</i> normalisation, so the hole takes the per-channel mean colour rather than black.</p>
+
+<p><b>Mixup</b> blends two images and their labels in the same proportion:</p>
+
+$$\tilde x = \lambda x_i + (1-\lambda)x_j
+\qquad
+L = \lambda\,\mathrm{CE}\big(f(\tilde x), y_i\big) + (1-\lambda)\,\mathrm{CE}\big(f(\tilde x), y_j\big)$$
+
+<p>with $\lambda \sim \mathrm{Beta}(\alpha,\alpha)$ and $\alpha = 1$ (which makes $\lambda$
+uniform on $[0,1]$).</p>
+
+<figure>
+  <img src="figs/f_augment.svg" alt="examples of each augmentation">
+  <figcaption><b>What the augmentations actually do</b> to one CIFAR-10 image. Flipping and
+  cropping produce images that are still obviously the same object &mdash; they add <i>real</i>
+  information about what does not change. Cutout hides evidence. Mixup produces an image that does
+  not exist at all, labelled 60% one class and 40% the other.</figcaption>
+</figure>
+
+<div class="box why"><b class="lbl">Why mixup is not as strange as it looks</b>
+Asking a network to predict "60% cat, 40% ship" sounds absurd. The purpose is to force the
+network to behave <b>linearly between training examples</b>. Left alone, a network makes wildly
+overconfident predictions in the empty space between the examples it has seen &mdash; and that
+over-confidence <i>is</i> the memorisation. Mixup fills that space with sensible targets.</div>
+
+<div class="box trap"><b class="lbl">A measurement decision that matters</b>
+Training accuracy is always measured on <b>clean, un-augmented images</b>, in a separate pass.
+If it were measured on augmented batches, mixup's "training accuracy" would be computed against
+blended labels &mdash; a different quantity entirely &mdash; and the gap column would not be
+comparable across rows. The gap is the whole point of the table, so it has to measure the same
+thing everywhere.</div>
+
+<h3>What I measured</h3>
+
+<figure>
+  <img src="figs/f_t3a.svg" alt="regularization results">
+  <figcaption><b>Task 3(a).</b> Left: training accuracy (pale) against best validation accuracy
+  (solid). Right: the memorisation gap. Red bars are the configurations that still memorise
+  completely; green is the one that does not.</figcaption>
+</figure>
+
+<table>
+<tr><th>Config</th><th>Train acc</th><th>Best val acc</th><th>Gap</th><th>Reading</th></tr>
+<tr><td>baseline</td><td class="num">100.00%</td><td class="num">67.36%</td><td class="num">32.6</td>
+    <td>Perfect memorisation of all 5,000 images</td></tr>
+<tr><td>weight decay</td><td class="num">100.00%</td><td class="num">68.42%</td><td class="num">31.9</td>
+    <td>+1.1 pts &mdash; still memorises completely</td></tr>
+<tr><td>dropout</td><td class="num">100.00%</td><td class="num">67.80%</td><td class="num">32.6</td>
+    <td>+0.4 pts &mdash; almost no effect</td></tr>
+<tr><td><b>flip+crop</b></td><td class="num">83.10%</td><td class="num"><b>70.88%</b></td>
+    <td class="num">17.4</td><td><b>Best single method, +3.5 pts</b></td></tr>
+<tr><td>cutout</td><td class="num">98.06%</td><td class="num">67.94%</td><td class="num">34.1</td>
+    <td>+0.6 pts</td></tr>
+<tr><td>mixup</td><td class="num">99.46%</td><td class="num">65.46%</td><td class="num">36.5</td>
+    <td>&minus;1.9 pts &mdash; <i>hurt</i> at this scale</td></tr>
+<tr><td>all combined</td><td class="num">72.56%</td><td class="num">68.82%</td>
+    <td class="num"><b>7.5</b></td><td>Smallest gap by far, +1.5 pts</td></tr>
+</table>
+
+<div class="box key"><b class="lbl">The clearest finding: only augmentation actually stops memorisation</b>
+Look at the training-accuracy column. Baseline, weight decay and dropout <b>all reach exactly
+100%</b> &mdash; they memorise all 5,000 images perfectly despite the regularization. Only the
+methods that <b>change the data</b> (flip+crop, and the combination) prevent that, because the
+network never sees the same image twice and so has nothing fixed to memorise.
+<br><br>
+So the two mechanisms are not equally effective here: <b>constraining the weights barely helped;
+changing the data did.</b></div>
+
+<div class="box why"><b class="lbl">Why dropout did almost nothing &mdash; worth being able to explain</b>
+In my <code>SmallCNN</code>, dropout sits <b>only after global average pooling</b>, on a
+128-dimensional vector just before the classifier. That is a much weaker intervention than dropout
+between convolutional layers. The result is a property of <i>where it was placed</i>, not evidence
+that dropout is useless.
+<br><br>
+Similarly, weight decay is applied to <b>every</b> parameter including the batch-norm scale and
+shift. Common practice excludes those. Both choices are defensible, but they explain the small
+effects.</div>
+
+<div class="box trap"><b class="lbl">Two results that look like failures but are findings</b>
+<b>Mixup hurt (&minus;1.9 points).</b> With $\alpha=1$ on only 5,000 images, mixup is very strong
+&mdash; nearly every training image is a blend, and the network gets little clean signal. Mixup
+usually needs more data or longer training to pay off.
+<br><br>
+<b>"All combined" is <i>not</i> the best.</b> It has by far the smallest gap (7.5 points) but only
+68.82% validation &mdash; below flip+crop alone at 70.88%. Five regularizers on 5,000 images
+<b>over-constrain</b> a small network: training accuracy falls to 72.56%, which is
+<b>underfitting</b>, not successful regularization. More regularization is not automatically
+better.</div>
+
+<div class="box say"><b class="lbl">The 30-second version of part (a)</b>
+"With only 5,000 images my network memorised them perfectly &mdash; 100% on training, 67% on
+validation. Penalising the weights barely helped; it still memorised. What worked was changing the
+pictures: flipping and cropping them so it never saw the same image twice. That gave the best
+result. And stacking every technique at once actually made it worse &mdash; it closed the gap, but
+by making the network too constrained to learn."</div>
+
+<h2 class="pb">4.2 Part (b) &mdash; the degradation problem</h2>
+
+<p>These are the CIFAR networks from the ResNet paper: one stem convolution, then <b>three
+stages</b> of $n$ blocks each at <b>16, 32 and 64 channels</b>, then global average pooling and a
+linear classifier. Each block has two $3\times3$ convolutions, so total depth is</p>
+
+$$\text{depth} = 6n + 2
+\qquad
+n=1 \Rightarrow 8,\quad n=3 \Rightarrow 20,\quad n=9 \Rightarrow 56$$
+
+<h3>The only difference between the two families</h3>
+
+<div class="flow">PLAIN BLOCK                          RESIDUAL BLOCK
+
+  x                                    x ---------------+
+  |                                    |                |
+ conv 3x3                             conv 3x3          |  shortcut
+ batchnorm                            batchnorm         |  (identity)
+ ReLU                                 ReLU              |
+  |                                    |                |
+ conv 3x3                             conv 3x3          |
+ batchnorm                            batchnorm         |
+  |                                    |                |
+  |                                    + &lt;--------------+
+  |                                    |
+ ReLU                                 ReLU
+  |                                    |
+ out                                  out
+
+ out = F(x)                           out = F(x) + x</div>
+
+<p>In code it is literally one line:</p>
+
+<pre><span class="k">if</span> self.residual:
+    out = out + self.shortcut(x)</pre>
+
+<div class="box key"><b class="lbl">Keeping the comparison honest: Option A shortcuts</b>
+Where a block changes shape, the shortcut has to match. I used <b>Option A</b> from the ResNet
+paper &mdash; subsample with a stride and zero-pad the extra channels &mdash; rather than a
+$1\times1$ convolution. Option A has <b>no parameters at all</b>, so:
+<table style="margin-top:.5em">
+<tr><th>Depth</th><th>Plain</th><th>Residual</th><th>Identical?</th></tr>
+<tr><td>8</td><td class="num">75,290</td><td class="num">75,290</td><td>yes</td></tr>
+<tr><td>20</td><td class="num">269,722</td><td class="num">269,722</td><td>yes</td></tr>
+<tr><td>56</td><td class="num">853,018</td><td class="num">853,018</td><td>yes</td></tr>
+</table>
+The two families have <b>exactly</b> the same number of parameters at every depth. So any
+difference in the plot below <i>cannot</i> be explained by one having more capacity. It can only
+be the shortcut.</div>
+
+<div class="box why"><b class="lbl">Also: no data augmentation in part (b)</b>
+Unlike part (a). The question here is whether a deep network can be <b>optimised</b>, so the
+networks are allowed to fit the training data as hard as they can, and the training-loss curves
+are compared directly. Augmentation would damp exactly the effect being measured.</div>
+
+<h3>What I measured</h3>
+
+<figure>
+  <img src="figs/f_t3b.svg" alt="training loss for plain and residual networks">
+  <figcaption><b>Task 3(b).</b> Training loss on a logarithmic scale, 30 epochs. Left: the plain
+  family. The 56-layer network (dark red) gets <b>stuck</b> &mdash; it ends far worse than its own
+  20-layer version. Right: the residual family. Depth keeps helping.</figcaption>
+</figure>
+
+<figure>
+  <img src="figs/f_t3b_summary.svg" alt="final training loss versus depth">
+  <figcaption>The same result as one picture: final training loss against depth. For the residual
+  family, deeper is monotonically better. For the plain family, going from 20 to 56 layers makes
+  training loss <b>200 times worse</b>.</figcaption>
+</figure>
+
+<table>
+<tr><th>Network</th><th>Parameters</th><th>Final training loss</th><th>Validation accuracy</th></tr>
+<tr><td>plain-8</td><td class="num">75,290</td><td class="num">0.0617</td><td class="num">79.40%</td></tr>
+<tr><td>residual-8</td><td class="num">75,290</td><td class="num">0.0641</td><td class="num">79.10%</td></tr>
+<tr><td>plain-20</td><td class="num">269,722</td><td class="num">0.0037</td><td class="num">82.56%</td></tr>
+<tr><td>residual-20</td><td class="num">269,722</td><td class="num">0.0017</td><td class="num">83.16%</td></tr>
+<tr><td><b>plain-56</b></td><td class="num">853,018</td><td class="num"><b>0.7719</b></td>
+    <td class="num"><b>57.72%</b></td></tr>
+<tr><td><b>residual-56</b></td><td class="num">853,018</td><td class="num"><b>0.0009</b></td>
+    <td class="num"><b>80.78%</b></td></tr>
+</table>
+
+<div class="box key"><b class="lbl">The headline numbers</b>
+<ul>
+<li><b>plain-56 trains 200&times; worse than plain-20</b> (0.7719 vs 0.0037) despite having
+<b>three times more parameters</b>.</li>
+<li><b>residual-56 trains 860&times; better than plain-56</b> (0.0009 vs 0.7719) with
+<b>exactly the same parameter count</b>.</li>
+<li>At depth 8 the two are <b>effectively tied</b> (0.0617 vs 0.0641).</li>
+</ul></div>
+
+<div class="box why"><b class="lbl">Why this is NOT overfitting &mdash; the single most important point</b>
+Overfitting means <b>low</b> training loss with poor validation accuracy. Here the <b>training</b>
+loss itself is bad &mdash; on data the network is actively being fitted to. That is a different
+disease entirely.
+<br><br>
+And it should be impossible. A 56-layer network can represent <i>anything</i> a 20-layer one can:
+just set the extra 36 layers to the identity function and you recover the shallower network
+exactly. So plain-56 has <b>strictly more capacity</b> and <i>must</i> be able to reach at least as
+low a training loss as plain-20.
+<br><br>
+It fails to. So the capacity is there and <b>gradient descent cannot find it</b>. This is an
+<b>optimisation</b> failure, and the ResNet paper named it the <b>degradation problem</b>.</div>
+
+<div class="box key"><b class="lbl">Why the shortcut fixes it</b>
+A residual block computes $\text{out} = F(x) + x$. To represent the identity it only needs to
+drive $F$ to <b>zero</b> &mdash; and driving a thing to zero is the easiest thing a network with
+weight decay does. A plain block must <i>learn</i> to reproduce its own input before it can improve
+on it, and 56 layers of that is hard.
+<br><br>
+The shortcut also gives the gradient a path with derivative <b>exactly 1</b> all the way back to
+earlier layers &mdash; the clean route that Task 1(d) showed sigmoid lacked. ReLU and Kaiming
+initialisation fixed the signal <i>at initialisation</i>; at 56 layers it degrades again
+<i>during training</i>, and the shortcut is what holds the path open.</div>
+
+<div class="box why"><b class="lbl">Reading the depth-8 tie correctly</b>
+At 8 layers there is no degradation to fix, so the shortcut buys nothing &mdash; plain-8 even edges
+ahead by a hair (0.0617 vs 0.0641). <b>This is a feature of the result, not noise to explain away:</b>
+it shows the benefit is specifically about <i>depth</i>, not a free improvement you get everywhere.
+<br><br>
+Also note residual-56 (0.0009) beat residual-20 (0.0017) on training loss but <i>not</i> on
+validation accuracy (80.78% vs 83.16%). With only 30 epochs and no augmentation, the 56-layer
+network fits the training set hardest and generalises slightly worse. The ResNet paper trained for
+180 epochs with augmentation.</div>
+
+<div class="box say"><b class="lbl">The 30-second version of part (b)</b>
+"I built the same network twice, plain and with shortcut connections, with <i>identical</i>
+parameter counts. At 8 and 20 layers they tie. At 56 layers the plain one breaks &mdash; its
+training loss is 200 times worse than its own 20-layer version, even though it has three times more
+parameters. That is not overfitting, because the <i>training</i> loss is what got worse. The deeper
+network could copy the shallower one by setting layers to the identity, so the ability is there and
+gradient descent just cannot find it. Adding one line &mdash; <code>out = out + x</code> &mdash;
+fixes it completely: the residual version reaches 0.0009 instead of 0.77."</div>
