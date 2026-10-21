@@ -3,7 +3,8 @@
 CIFAR-10 / PyTorch assignment: backpropagation from scratch, optimizers,
 regularization and residual networks.
 
-- Notebook: `EN4554_a02.ipynb`
+- Notebook: `EN4554_a02.ipynb` — the single submission artifact. All explanations and
+  interpretations live in the notebook itself; export it to `220355M_a02.pdf`.
 - Cached experiment histories: `results/*.json`
 - Dataset (`data/`) is gitignored; it re-downloads automatically on first run.
 
@@ -28,3 +29,15 @@ Select the **Python (cnn_gpu)** kernel in Jupyter/VS Code.
 - Python 3.10 on Windows can throw `ssl.SSLError: [ASN1: NOT_ENOUGH_DATA]`
   when loading the system certificate store, which breaks the download. The
   setup cell works around this by pointing SSL at certifi's CA bundle.
+
+## Submission
+
+Per the lecturer: *"For assignment 2 you should add all explanations and interpretations
+to the jupyter notebook itself, export it to a pdf and submit. No need to make a separate
+report other than that."*
+
+So `EN4554_a02.ipynb` is the whole submission. Restart-and-Run-All, then export to
+`220355M_a02.pdf`.
+
+`report/` is no longer needed for submission and is kept only as a by-product
+(`report/figures/*.pdf` are still used to rebuild the explainer).
